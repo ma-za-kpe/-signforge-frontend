@@ -15,6 +15,11 @@ const nextConfig: NextConfig = {
         port: '9000',
         pathname: '/sign_images/**',
       },
+      {
+        protocol: 'https',
+        hostname: 'invigorating-forgiveness-production-a14c.up.railway.app',
+        pathname: '/sign_images/**',
+      },
     ],
   },
 };

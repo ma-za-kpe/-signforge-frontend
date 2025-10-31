@@ -1,0 +1,370 @@
+'use client'
+
+import { useRef, useState, useEffect } from 'react'
+import Webcam from 'react-webcam'
+import { MediaPipeHandler, LandmarkResult, drawSkeletonOverlay } from './MediaPipeHandler'
+import ReferencePlayer from './ReferencePlayer'
+import SignSelector from './SignSelector'
+
+type PageState = 'select' | 'reference' | 'recording' | 'review' | 'success'
+
+interface Frame {
+  frame_number: number
+  timestamp: number
+  pose_landmarks: any[]
+  left_hand_landmarks: any[] | null
+  right_hand_landmarks: any[] | null
+  face_landmarks: any[] | null
+}
+
+export default function ContributionPage() {
+  // State management
+  const [pageState, setPageState] = useState<PageState>('select')
+  const [selectedWord, setSelectedWord] = useState<string>('')
+  const [countdown, setCountdown] = useState<number | null>(null)
+  const [isRecording, setIsRecording] = useState(false)
+  const [recordedFrames, setRecordedFrames] = useState<Frame[]>([])
+  const [contributionStats, setContributionStats] = useState({ total: 0, progress: 0 })
+  const [userId] = useState(() => {
+    // Generate anonymous user ID (client-side)
+    return `user_${Math.random().toString(36).substr(2, 9)}_${Date.now()}`
+  })
+
+  // Refs
+  const webcamRef = useRef<Webcam>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const mediaPipeHandlerRef = useRef<MediaPipeHandler | null>(null)
+  const recordingStartTimeRef = useRef<number>(0)
+  const frameCountRef = useRef<number>(0)
+
+  // Initialize MediaPipe when entering recording state
+  useEffect(() => {
+    if (pageState === 'recording' && webcamRef.current?.video) {
+      initializeMediaPipe()
+    }
+
+    return () => {
+      if (mediaPipeHandlerRef.current) {
+        mediaPipeHandlerRef.current.dispose()
+      }
+    }
+  }, [pageState])
+
+  const initializeMediaPipe = async () => {
+    if (!webcamRef.current?.video) return
+
+    const videoElement = webcamRef.current.video as HTMLVideoElement
+
+    mediaPipeHandlerRef.current = new MediaPipeHandler(videoElement, handleLandmarkResults)
+
+    try {
+      await mediaPipeHandlerRef.current.initialize()
+      await mediaPipeHandlerRef.current.start()
+      console.log('✓ MediaPipe ready for recording')
+    } catch (error) {
+      console.error('Failed to initialize MediaPipe:', error)
+      alert('Failed to start camera. Please check permissions and try again.')
+    }
+  }
+
+  const handleLandmarkResults = (results: LandmarkResult) => {
+    // Draw skeleton overlay
+    if (canvasRef.current && webcamRef.current?.video) {
+      const video = webcamRef.current.video
+      drawSkeletonOverlay(canvasRef.current, results, video.videoWidth, video.videoHeight)
+    }
+
+    // Record frames during recording
+    if (isRecording) {
+      const elapsed = (Date.now() - recordingStartTimeRef.current) / 1000
+      const frameNumber = frameCountRef.current++
+
+      const frame: Frame = {
+        frame_number: frameNumber,
+        timestamp: elapsed,
+        pose_landmarks: results.poseLandmarks || [],
+        left_hand_landmarks: results.leftHandLandmarks,
+        right_hand_landmarks: results.rightHandLandmarks,
+        face_landmarks: results.faceLandmarks
+      }
+
+      setRecordedFrames((prev) => [...prev, frame])
+
+      // Stop after 2 seconds (60 frames @ 30fps)
+      if (elapsed >= 2.0) {
+        stopRecording()
+      }
+    }
+  }
+
+  const handleSignSelected = (word: string) => {
+    setSelectedWord(word)
+    setPageState('reference')
+  }
+
+  const handleReferenceReady = () => {
+    setPageState('recording')
+  }
+
+  const startCountdown = () => {
+    setCountdown(5)
+
+    const interval = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev === null || prev <= 1) {
+          clearInterval(interval)
+          startRecording()
+          return null
+        }
+        return prev - 1
+      })
+    }, 1000)
+  }
+
+  const startRecording = () => {
+    setIsRecording(true)
+    setRecordedFrames([])
+    recordingStartTimeRef.current = Date.now()
+    frameCountRef.current = 0
+    console.log('🔴 Recording started')
+  }
+
+  const stopRecording = () => {
+    setIsRecording(false)
+    setPageState('review')
+    console.log(`✓ Recording stopped - captured ${recordedFrames.length} frames`)
+  }
+
+  const handleSubmitContribution = async () => {
+    if (recordedFrames.length < 30) {
+      alert('Recording too short. Please try again.')
+      return
+    }
+
+    try {
+      const contribution = {
+        word: selectedWord,
+        user_id: userId,
+        frames: recordedFrames,
+        duration: recordedFrames[recordedFrames.length - 1]?.timestamp || 2.0,
+        metadata: {
+          browser: navigator.userAgent,
+          timestamp: new Date().toISOString()
+        }
+      }
+
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/contribute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(contribution)
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.detail || 'Submission failed')
+      }
+
+      const result = await response.json()
+
+      setContributionStats({
+        total: result.total_contributions,
+        progress: result.progress_percentage
+      })
+
+      setPageState('success')
+
+      // Auto-advance to next recording after 3 seconds
+      setTimeout(() => {
+        setRecordedFrames([])
+        setPageState('recording')
+      }, 3000)
+
+    } catch (error: any) {
+      console.error('Failed to submit contribution:', error)
+      alert(`Failed to submit: ${error.message}`)
+    }
+  }
+
+  const handleRetake = () => {
+    setRecordedFrames([])
+    setPageState('recording')
+  }
+
+  const handleChooseDifferentSign = () => {
+    setSelectedWord('')
+    setRecordedFrames([])
+    setPageState('select')
+  }
+
+  // ===========================
+  // RENDER BASED ON STATE
+  // ===========================
+
+  if (pageState === 'select') {
+    return <SignSelector onSelectSign={handleSignSelected} />
+  }
+
+  if (pageState === 'reference') {
+    const signImageUrl = `${process.env.NEXT_PUBLIC_API_URL}/sign_images/${selectedWord}.png`
+    return (
+      <ReferencePlayer
+        word={selectedWord}
+        signImageUrl={signImageUrl}
+        onReady={handleReferenceReady}
+      />
+    )
+  }
+
+  if (pageState === 'recording' || pageState === 'review') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-3 sm:p-6 md:p-8">
+        <div className="max-w-5xl mx-auto">
+          {/* Header */}
+          <div className="text-center mb-4 sm:mb-6 md:mb-8">
+            <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-gray-800 mb-2">
+              Recording: <span className="text-indigo-600">{selectedWord}</span>
+            </h1>
+            {isRecording && (
+              <div className="flex items-center justify-center space-x-2">
+                <div className="w-2 h-2 sm:w-3 sm:h-3 bg-red-600 rounded-full animate-pulse"></div>
+                <span className="text-sm sm:text-base text-red-600 font-semibold">RECORDING...</span>
+              </div>
+            )}
+          </div>
+
+          {/* Video + Canvas Container */}
+          <div className="relative bg-black rounded-lg sm:rounded-xl md:rounded-2xl overflow-hidden shadow-2xl mb-4 sm:mb-6 md:mb-8" style={{ aspectRatio: '16/9' }}>
+            <Webcam
+              ref={webcamRef}
+              audio={false}
+              screenshotFormat="image/jpeg"
+              videoConstraints={{
+                width: 1280,
+                height: 720,
+                facingMode: 'user'
+              }}
+              className="w-full h-full object-cover"
+            />
+
+            {/* Skeleton Overlay Canvas */}
+            <canvas
+              ref={canvasRef}
+              width={1280}
+              height={720}
+              className="absolute top-0 left-0 w-full h-full pointer-events-none"
+            />
+
+            {/* Countdown Overlay */}
+            {countdown !== null && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50">
+                <div className="text-white text-6xl sm:text-7xl md:text-9xl font-bold animate-pulse">
+                  {countdown}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Controls */}
+          {pageState === 'recording' && !isRecording && countdown === null && (
+            <div className="text-center px-4">
+              <button
+                onClick={startCountdown}
+                className="bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 sm:py-4 sm:px-8 rounded-lg sm:rounded-xl transition-all duration-200 transform hover:scale-105 shadow-lg text-base sm:text-lg md:text-xl w-full sm:w-auto"
+              >
+                🎬 Start Recording (5s countdown)
+              </button>
+              <p className="mt-3 sm:mt-4 text-sm sm:text-base text-gray-600">
+                Position yourself clearly in the frame, then click to start the countdown
+              </p>
+            </div>
+          )}
+
+          {pageState === 'review' && (
+            <div className="space-y-3 sm:space-y-4 px-3 sm:px-0">
+              <div className="bg-white rounded-lg sm:rounded-xl p-4 sm:p-6 shadow-lg">
+                <h2 className="text-xl sm:text-2xl font-semibold text-gray-800 mb-3 sm:mb-4">
+                  Review Your Recording
+                </h2>
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 mb-4 text-sm sm:text-base">
+                  <div className="text-gray-700">
+                    <strong>Frames captured:</strong> {recordedFrames.length}
+                  </div>
+                  <div className="text-gray-700">
+                    <strong>Duration:</strong> {recordedFrames[recordedFrames.length - 1]?.timestamp.toFixed(2) || 0}s
+                  </div>
+                </div>
+
+                <p className="text-sm sm:text-base text-gray-600 mb-4 sm:mb-6">
+                  Did your hands stay clearly visible throughout the recording?
+                </p>
+
+                <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
+                  <button
+                    onClick={handleSubmitContribution}
+                    className="flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 sm:px-6 rounded-lg sm:rounded-xl transition-all duration-200 text-sm sm:text-base"
+                  >
+                    ✓ Looks Good - Submit
+                  </button>
+                  <button
+                    onClick={handleRetake}
+                    className="flex-1 bg-gray-600 hover:bg-gray-700 text-white font-bold py-3 px-4 sm:px-6 rounded-lg sm:rounded-xl transition-all duration-200 text-sm sm:text-base"
+                  >
+                    ↻ Retake
+                  </button>
+                </div>
+              </div>
+
+              <button
+                onClick={handleChooseDifferentSign}
+                className="w-full bg-indigo-100 hover:bg-indigo-200 text-indigo-700 font-semibold py-3 px-4 sm:px-6 rounded-lg sm:rounded-xl transition-all duration-200 text-sm sm:text-base"
+              >
+                ← Choose Different Sign
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  if (pageState === 'success') {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-green-50 to-emerald-100 p-4">
+        <div className="max-w-2xl w-full bg-white rounded-xl sm:rounded-2xl shadow-2xl p-6 sm:p-8 md:p-12 text-center">
+          <div className="text-5xl sm:text-6xl mb-4 sm:mb-6">🎉</div>
+          <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-gray-800 mb-3 sm:mb-4">
+            Thank You!
+          </h1>
+          <p className="text-base sm:text-lg md:text-xl text-gray-600 mb-6 sm:mb-8">
+            Your contribution has been submitted successfully
+          </p>
+
+          <div className="bg-indigo-50 rounded-lg sm:rounded-xl p-4 sm:p-6 mb-6 sm:mb-8">
+            <div className="text-2xl sm:text-3xl font-bold text-indigo-600 mb-2">
+              {contributionStats.total}
+            </div>
+            <div className="text-sm sm:text-base text-gray-700">
+              Total contributions for <strong>{selectedWord}</strong>
+            </div>
+
+            <div className="w-full bg-gray-200 rounded-full h-3 sm:h-4 mt-3 sm:mt-4">
+              <div
+                className="bg-indigo-600 h-3 sm:h-4 rounded-full transition-all duration-500"
+                style={{ width: `${contributionStats.progress}%` }}
+              ></div>
+            </div>
+            <div className="text-xs sm:text-sm text-gray-600 mt-2">
+              {contributionStats.progress.toFixed(0)}% complete
+            </div>
+          </div>
+
+          <p className="text-sm sm:text-base text-gray-500">
+            Automatically starting next recording...
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  return null
+}

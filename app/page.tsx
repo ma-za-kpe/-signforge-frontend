@@ -139,6 +139,22 @@ export default function Home() {
 
       {/* Main Content */}
       <main className="flex-1 max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8 w-full">
+        {/* Community Contribution Banner */}
+        <div className="mb-4 p-4 sm:p-6 bg-gradient-to-r from-green-600 to-emerald-600 rounded-xl text-white">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="flex-1">
+              <h3 className="text-lg sm:text-xl font-bold">🎥 Help Build Ghana's Sign Language Database</h3>
+              <p className="text-sm sm:text-base text-green-100 mt-1">Teach the AI by recording yourself signing. Your contribution helps create authentic GSL videos!</p>
+            </div>
+            <a
+              href="/contribute"
+              className="w-full sm:w-auto text-center px-6 py-3 bg-white text-green-600 font-bold rounded-lg hover:bg-green-50 transition-all shadow-lg whitespace-nowrap min-h-[44px] flex items-center justify-center"
+            >
+              Start Contributing 🚀
+            </a>
+          </div>
+        </div>
+
         {/* Teacher Dashboard Link */}
         <div className="mb-6 p-4 sm:p-6 bg-gradient-to-r from-[#00549F] to-[#00A2E5] rounded-xl text-white">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -218,13 +234,59 @@ export default function Home() {
           </form>
         </div>
 
-        {/* Error Message */}
+        {/* Word Not Found / Error Message */}
         {error && (
-          <div className="mb-8 p-4 bg-red-50 border border-red-200 rounded-lg">
-            <p className="text-red-800 font-medium">Error: {error}</p>
-            <p className="text-red-600 text-sm mt-1">
-              Try searching for a different word or check your connection to the API.
-            </p>
+          <div className="mb-8 max-w-2xl mx-auto">
+            <div className="bg-gradient-to-br from-orange-50 to-amber-50 border-2 border-orange-200 rounded-xl p-6 sm:p-8 shadow-lg">
+              <div className="text-center mb-6">
+                <div className="text-5xl mb-3">🔍</div>
+                <h3 className="text-xl sm:text-2xl font-bold text-orange-900 mb-2">
+                  Word Not Found in Dictionary
+                </h3>
+                <p className="text-orange-800 font-medium text-base sm:text-lg">
+                  "{query}"
+                </p>
+                <p className="text-orange-700 text-sm mt-2">
+                  This word isn't in our database yet, but you can help add it!
+                </p>
+              </div>
+
+              {/* Be the First CTA */}
+              <div className="bg-white rounded-lg p-5 border-2 border-orange-300 mb-4">
+                <div className="flex items-start gap-3 mb-3">
+                  <span className="text-3xl">🌟</span>
+                  <div>
+                    <h4 className="font-bold text-orange-900 text-base sm:text-lg">Be the first contributor!</h4>
+                    <p className="text-sm text-gray-700 mt-1">
+                      Record yourself signing "{query}" and help build Ghana's Sign Language database
+                    </p>
+                  </div>
+                </div>
+                <a
+                  href={`/contribute?word=${encodeURIComponent(query)}`}
+                  className="block w-full px-6 py-4 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white font-bold rounded-lg transition-all shadow-md hover:shadow-xl text-center group"
+                >
+                  <span className="flex items-center justify-center gap-2 text-base sm:text-lg">
+                    <span className="text-2xl">🎥</span>
+                    <span>Contribute "{query}" Now</span>
+                    <span className="transform group-hover:translate-x-1 transition-transform">→</span>
+                  </span>
+                  <span className="block text-xs text-green-100 mt-2">Your contribution will help 500,000+ deaf students</span>
+                </a>
+              </div>
+
+              {/* Alternative Actions */}
+              <div className="flex flex-col sm:flex-row gap-3 text-sm">
+                <div className="flex-1 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                  <p className="text-blue-900 font-medium mb-1">💡 Try another word</p>
+                  <p className="text-blue-700 text-xs">Search for similar words or synonyms</p>
+                </div>
+                <div className="flex-1 bg-purple-50 border border-purple-200 rounded-lg p-3">
+                  <p className="text-purple-900 font-medium mb-1">📚 Browse dictionary</p>
+                  <p className="text-purple-700 text-xs">Explore our {stats?.total_signs.toLocaleString() || '1,582'} signs</p>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
