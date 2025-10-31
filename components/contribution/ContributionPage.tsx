@@ -129,11 +129,20 @@ export default function ContributionPage() {
 
   const handleLandmarkResults = (results: LandmarkResult) => {
     console.log('📸 handleLandmarkResults called, isRecording:', isRecordingRef.current)
-    
+
     // Draw skeleton overlay
     if (canvasRef.current && webcamRef.current?.video) {
       const video = webcamRef.current.video
-      drawSkeletonOverlay(canvasRef.current, results, video.videoWidth, video.videoHeight)
+      const canvas = canvasRef.current
+
+      // Sync canvas size with video display size
+      const rect = video.getBoundingClientRect()
+      if (canvas.width !== rect.width || canvas.height !== rect.height) {
+        canvas.width = rect.width
+        canvas.height = rect.height
+      }
+
+      drawSkeletonOverlay(canvas, results, rect.width, rect.height)
     }
 
     // Record frames during recording
@@ -494,9 +503,8 @@ export default function ContributionPage() {
             {/* Skeleton Overlay Canvas */}
             <canvas
               ref={canvasRef}
-              width={1280}
-              height={720}
               className="absolute top-0 left-0 w-full h-full pointer-events-none"
+              style={{ imageRendering: 'auto' }}
             />
 
             {/* Countdown Overlay */}
