@@ -7,12 +7,13 @@ import Webcam from 'react-webcam'
 import { MediaPipeHandler, LandmarkResult, drawSkeletonOverlay } from './MediaPipeHandler'
 import ReferencePlayer from './ReferencePlayer'
 import SignSelector from './SignSelector'
+import SignClassification from './SignClassification'
 import RecordingFeedback from './RecordingFeedback'
 import SkeletonPreview from './SkeletonPreview'
 import CommunityContributions from './CommunityContributions'
 import QualityFeedback from './QualityFeedback'
 
-type PageState = 'select' | 'community' | 'reference' | 'recording' | 'review' | 'success'
+type PageState = 'select' | 'community' | 'reference' | 'classification' | 'recording' | 'review' | 'success'
 
 interface Frame {
   frame_number: number
@@ -44,6 +45,10 @@ export default function ContributionPage() {
     // Generate anonymous user ID (client-side)
     return `user_${Math.random().toString(36).substr(2, 9)}_${Date.now()}`
   })
+  const [signClassification, setSignClassification] = useState<{
+    sign_type_movement: 'static' | 'dynamic'
+    sign_type_hands: 'one-handed' | 'two-handed'
+  } | null>(null)
 
   // Auto-select word from URL parameter
   useEffect(() => {
@@ -188,7 +193,19 @@ export default function ContributionPage() {
 
 
   const handleReferenceReady = () => {
+    setPageState('classification')
+  }
+
+  const handleClassificationComplete = (classification: {
+    sign_type_movement: 'static' | 'dynamic'
+    sign_type_hands: 'one-handed' | 'two-handed'
+  }) => {
+    setSignClassification(classification)
     setPageState('recording')
+  }
+
+  const handleBackToReference = () => {
+    setPageState('reference')
   }
 
   const startCountdown = () => {
@@ -436,6 +453,19 @@ export default function ContributionPage() {
         word={selectedWord}
         signImageUrl={signImageUrl}
         onReady={handleReferenceReady}
+      />
+      </>
+    )
+  }
+
+  if (pageState === 'classification') {
+    return (
+      <>
+      <Toaster position="top-center" reverseOrder={false} />
+      <SignClassification
+        word={selectedWord}
+        onComplete={handleClassificationComplete}
+        onBack={handleBackToReference}
       />
       </>
     )
