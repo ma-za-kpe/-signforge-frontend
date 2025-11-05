@@ -111,6 +111,7 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
   const recordingStartTimeRef = useRef<number>(0)
   const frameCountRef = useRef<number>(0)
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const stopRecordingRef = useRef<(() => void) | null>(null)
 
   // Track recording progress and auto-stop fallback
   useEffect(() => {
@@ -123,9 +124,9 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
         const elapsed = (Date.now() - recordingStartTimeRef.current) / 1000
         console.log('⏱ Timer tick:', elapsed.toFixed(2), 's')
         setRecordingElapsed(elapsed)
-        setRecordingProgress((elapsed / 3.0) * 100)
-        
-        if (elapsed >= 3.5) {
+        setRecordingProgress((elapsed / 4.0) * 100)
+
+        if (elapsed >= 4.5) {
           console.log('⏱ Timer fallback stopping recording at', elapsed.toFixed(2), 's')
           clearInterval(recordingTimerRef.current!)
           stopRecording()
@@ -280,12 +281,12 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
         return [...prev, frame]
       })
 
-      // Stop after 3 seconds
-      if (elapsed >= 3.0) {
-        stopRecording()
+      // Stop after 4 seconds (increased from 3 to ensure minimum 30 frames)
+      if (elapsed >= 4.0 && stopRecordingRef.current) {
+        stopRecordingRef.current()
       }
     }
-  }, [pageState, stopRecording]) // Add dependencies to fix stale closure bug
+  }, [pageState]) // Only depend on pageState to fix stale closure bug
 
   const handleSignSelected = (word: string) => {
     setSelectedWord(word)
@@ -465,6 +466,11 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
     // Tests can use jest.advanceTimersByTime(500) to advance past the flash
     setTimeout(handleCompletion, 500)
   }, [handleAttemptComplete, testMode])
+
+  // Keep stopRecording ref up-to-date for handleLandmarkResults callback
+  useEffect(() => {
+    stopRecordingRef.current = stopRecording
+  }, [stopRecording])
 
   const submitAveragedContribution = async (attempts: Array<{ frames: Frame[], quality: number, duration: number }>) => {
     // Temporal alignment: Use the attempt with median frame count as reference
