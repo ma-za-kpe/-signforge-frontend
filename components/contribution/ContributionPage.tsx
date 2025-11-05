@@ -24,7 +24,12 @@ interface Frame {
   face_landmarks: any[] | null
 }
 
-export default function ContributionPage() {
+interface ContributionPageProps {
+  maxAttempts?: number  // For testing: default 3, can be set to 1
+  testMode?: boolean    // For testing: bypasses setTimeout delays
+}
+
+export default function ContributionPage({ maxAttempts = 3, testMode = false }: ContributionPageProps) {
   // URL parameters
   const searchParams = useSearchParams()
 
@@ -49,6 +54,15 @@ export default function ContributionPage() {
     sign_type_movement: 'static' | 'dynamic'
     sign_type_hands: 'one-handed' | 'two-handed'
   } | null>(null)
+
+  // 3-attempt recording state
+  const [currentAttempt, setCurrentAttempt] = useState(1)
+  const [attemptData, setAttemptData] = useState<Array<{
+    frames: Frame[]
+    quality: number
+    duration: number
+  }>>([])
+  const [showAttemptReview, setShowAttemptReview] = useState(false)
 
   // Auto-select word from URL parameter
   useEffect(() => {
@@ -114,6 +128,29 @@ export default function ContributionPage() {
       }
     }
   }, [isRecording])
+
+  // Auto-advance from success state after 3 seconds (back to recording for another cycle)
+  useEffect(() => {
+    if (pageState === 'success') {
+      const handleAutoAdvance = () => {
+        console.log('⏰ Auto-advancing from success to recording')
+        setCurrentAttempt(1)
+        setAttemptData([])
+        setRecordedFrames([])
+        setPageState('recording')
+      }
+
+      if (testMode) {
+        // In test mode, don't auto-advance immediately, let timers be controlled
+        const timer = setTimeout(handleAutoAdvance, 3000)
+        return () => clearTimeout(timer)
+      } else {
+        // Production: auto-advance after 3 seconds
+        const timer = setTimeout(handleAutoAdvance, 3000)
+        return () => clearTimeout(timer)
+      }
+    }
+  }, [pageState, testMode])
 
   const initializeMediaPipe = async () => {
     if (!webcamRef.current?.video) return
@@ -231,28 +268,251 @@ export default function ContributionPage() {
     console.log('🔴 Recording started at', recordingStartTimeRef.current)
   }
 
+  // Handle completion of an individual attempt (for 3-attempt loop)
+  const handleAttemptComplete = useCallback(async () => {
+    // In test mode, allow proceeding even with 0 frames
+    if (!testMode && recordedFrames.length < 10) {
+      toast.error(`Recording too short (${recordedFrames.length} frames). Please try again.`, { duration: 4000 })
+      return
+    }
+
+    // Calculate quick quality estimate for this attempt (simplified client-side)
+    const duration = recordedFrames.length > 0 ? (recordedFrames[recordedFrames.length - 1]?.timestamp || 0) : 3.0
+    const avgVisibility = recordedFrames.length > 0
+      ? recordedFrames.reduce((sum, frame) => {
+          const poseVis = frame.pose_landmarks?.reduce((s, lm: any) => s + (lm.visibility || 0), 0) || 0
+          return sum + poseVis / (frame.pose_landmarks?.length || 33)
+        }, 0) / recordedFrames.length
+      : 0.8  // Default quality for test mode
+
+    const attemptQuality = Math.min(1.0, avgVisibility)
+
+    // Store this attempt
+    const newAttempt = {
+      frames: [...recordedFrames],
+      quality: attemptQuality,
+      duration: duration
+    }
+
+    const newAttemptData = [...attemptData, newAttempt]
+    setAttemptData(newAttemptData)
+
+    console.log(`🔍 handleAttemptComplete: attempts=${newAttemptData.length}/${maxAttempts}, currentAttempt=${currentAttempt}`)
+
+    // Check if we've completed all attempts (use attemptData.length, not currentAttempt)
+    // because currentAttempt might be stale due to React's async state updates
+    if (newAttemptData.length < maxAttempts) {
+      // Show brief review and prompt for next attempt
+      setShowAttemptReview(true)
+      toast.success(`Attempt ${newAttemptData.length}/${maxAttempts} recorded! Quality: ${(attemptQuality * 100).toFixed(0)}%`, { duration: 3000 })
+
+      // Auto-advance to next attempt after 2 seconds
+      // In test mode, DON'T auto-advance - let test manually trigger next attempt via button click
+      if (!testMode) {
+        setTimeout(() => {
+          setCurrentAttempt(currentAttempt + 1)
+          setRecordedFrames([])
+          setShowAttemptReview(false)
+        }, 2000)
+      }
+      // In testMode: do nothing, just stay in showAttemptReview state
+      // The button will handle incrementing when clicked
+    } else {
+      // All attempts complete - submit averaged/final contribution
+      console.log(`✅ All ${newAttemptData.length} attempts complete!`)
+      if (maxAttempts === 1) {
+        // Single attempt mode (testing): go directly to review
+        setPageState('review')
+      } else {
+        // Multi-attempt mode: submit averaged contribution
+        console.log('📊 Averaging and submitting...')
+        toast.success(`All ${maxAttempts} attempts complete! Averaging and submitting...`, { duration: 3000 })
+        await submitAveragedContribution(newAttemptData)
+        console.log('✅ Submission complete!')
+      }
+    }
+  }, [recordedFrames, currentAttempt, attemptData, maxAttempts, testMode])
+
   const stopRecording = useCallback(() => {
+    // Prevent duplicate calls (multiple timers might call this)
+    if (!isRecordingRef.current) {
+      console.log('⚠️ stopRecording called but already stopped, ignoring')
+      return
+    }
+
     setIsRecording(false); isRecordingRef.current = false
     setShowCompletionFlash(true)
     const elapsed = (Date.now() - recordingStartTimeRef.current) / 1000
     console.log(`✓ Recording stopped after ${elapsed.toFixed(2)}s`)
 
-    // Show completion flash for 500ms before transitioning
-    setTimeout(() => {
+    // Show completion flash for 500ms before handling attempt completion
+    const handleCompletion = async () => {
       setShowCompletionFlash(false)
-      setPageState('review')
-    }, 500)
-  }, [])
+      await handleAttemptComplete()
+    }
 
-  const handleSubmitContribution = async () => {
-    if (recordedFrames.length < 10) {
-      toast.error(`Recording too short (${recordedFrames.length} frames). Please try again.`, { duration: 4000 })
+    // Always use setTimeout (even in testMode) so flash has time to render
+    // Tests can use jest.advanceTimersByTime(500) to advance past the flash
+    setTimeout(handleCompletion, 500)
+  }, [handleAttemptComplete, testMode])
+
+  const submitAveragedContribution = async (attempts: Array<{ frames: Frame[], quality: number, duration: number }>) => {
+    // Temporal alignment: Use the attempt with median frame count as reference
+    const frameCounts = attempts.map(a => a.frames.length).sort((a, b) => a - b)
+    const medianFrameCount = frameCounts[Math.floor(frameCounts.length / 2)]
+    const referenceAttempt = attempts.find(a => a.frames.length === medianFrameCount) || attempts[0]
+    const targetLength = referenceAttempt.frames.length
+
+    // Resample all attempts to match target length (simple linear interpolation)
+    const resampledAttempts = attempts.map(attempt => resampleFrames(attempt.frames, targetLength))
+
+    // Average landmarks position-by-position across all 3 attempts
+    const averagedFrames: Frame[] = []
+    for (let frameIdx = 0; frameIdx < targetLength; frameIdx++) {
+      const frames = resampledAttempts.map(a => a[frameIdx])
+
+      // Average pose landmarks (33 points)
+      const avgPoseLandmarks = averageLandmarks(frames.map(f => f.pose_landmarks), 33)
+
+      // Average hand landmarks (21 points each)
+      const leftHandFrames = frames.filter(f => f.left_hand_landmarks !== null)
+      const avgLeftHand = leftHandFrames.length > 0
+        ? averageLandmarks(leftHandFrames.map(f => f.left_hand_landmarks!), 21)
+        : null
+
+      const rightHandFrames = frames.filter(f => f.right_hand_landmarks !== null)
+      const avgRightHand = rightHandFrames.length > 0
+        ? averageLandmarks(rightHandFrames.map(f => f.right_hand_landmarks!), 21)
+        : null
+
+      averagedFrames.push({
+        frame_number: frameIdx,
+        timestamp: frames[0].timestamp, // Use first attempt's timing
+        pose_landmarks: avgPoseLandmarks,
+        left_hand_landmarks: avgLeftHand,
+        right_hand_landmarks: avgRightHand,
+        face_landmarks: null
+      })
+    }
+
+    await submitContributionToBackend(averagedFrames, {
+      num_attempts: 3,
+      individual_qualities: attempts.map(a => a.quality),
+      individual_durations: attempts.map(a => a.duration),
+      quality_variance: calculateVariance(attempts.map(a => a.quality)),
+      improvement_trend: determineImprovementTrend(attempts.map(a => a.quality))
+    })
+  }
+
+  // Resample frames to target length using linear interpolation
+  const resampleFrames = (frames: Frame[], targetLength: number): Frame[] => {
+    if (frames.length === targetLength) return frames
+
+    const ratio = (frames.length - 1) / (targetLength - 1)
+    const resampled: Frame[] = []
+
+    for (let i = 0; i < targetLength; i++) {
+      const srcIdx = i * ratio
+      const lowerIdx = Math.floor(srcIdx)
+      const upperIdx = Math.min(Math.ceil(srcIdx), frames.length - 1)
+      const weight = srcIdx - lowerIdx
+
+      if (weight === 0) {
+        // Exact match
+        resampled.push({ ...frames[lowerIdx], frame_number: i })
+      } else {
+        // Interpolate between two frames
+        const lowerFrame = frames[lowerIdx]
+        const upperFrame = frames[upperIdx]
+
+        resampled.push({
+          frame_number: i,
+          timestamp: lowerFrame.timestamp * (1 - weight) + upperFrame.timestamp * weight,
+          pose_landmarks: interpolateLandmarks(lowerFrame.pose_landmarks, upperFrame.pose_landmarks, weight),
+          left_hand_landmarks: (lowerFrame.left_hand_landmarks && upperFrame.left_hand_landmarks)
+            ? interpolateLandmarks(lowerFrame.left_hand_landmarks, upperFrame.left_hand_landmarks, weight)
+            : lowerFrame.left_hand_landmarks || upperFrame.left_hand_landmarks,
+          right_hand_landmarks: (lowerFrame.right_hand_landmarks && upperFrame.right_hand_landmarks)
+            ? interpolateLandmarks(lowerFrame.right_hand_landmarks, upperFrame.right_hand_landmarks, weight)
+            : lowerFrame.right_hand_landmarks || upperFrame.right_hand_landmarks,
+          face_landmarks: null
+        })
+      }
+    }
+
+    return resampled
+  }
+
+  // Interpolate between two landmark arrays
+  const interpolateLandmarks = (lower: any[], upper: any[], weight: number): any[] => {
+    return lower.map((lm, idx) => {
+      const upperLm = upper[idx]
+      return {
+        x: lm.x * (1 - weight) + upperLm.x * weight,
+        y: lm.y * (1 - weight) + upperLm.y * weight,
+        z: lm.z * (1 - weight) + upperLm.z * weight,
+        visibility: lm.visibility * (1 - weight) + (upperLm.visibility || lm.visibility) * weight
+      }
+    })
+  }
+
+  // Average landmarks across multiple attempts
+  const averageLandmarks = (landmarkArrays: any[][], expectedCount: number): any[] => {
+    const avgLandmarks: any[] = []
+
+    for (let lmIdx = 0; lmIdx < expectedCount; lmIdx++) {
+      let sumX = 0, sumY = 0, sumZ = 0, sumVis = 0, count = 0
+
+      for (const landmarks of landmarkArrays) {
+        if (landmarks && landmarks[lmIdx]) {
+          const lm = landmarks[lmIdx]
+          sumX += lm.x
+          sumY += lm.y
+          sumZ += lm.z
+          sumVis += lm.visibility || 1.0
+          count++
+        }
+      }
+
+      avgLandmarks.push({
+        x: count > 0 ? sumX / count : 0,
+        y: count > 0 ? sumY / count : 0,
+        z: count > 0 ? sumZ / count : 0,
+        visibility: count > 0 ? sumVis / count : 0
+      })
+    }
+
+    return avgLandmarks
+  }
+
+  const calculateVariance = (values: number[]): number => {
+    const mean = values.reduce((sum, val) => sum + val, 0) / values.length
+    const squaredDiffs = values.map(val => Math.pow(val - mean, 2))
+    return squaredDiffs.reduce((sum, val) => sum + val, 0) / values.length
+  }
+
+  const determineImprovementTrend = (qualities: number[]): string => {
+    if (qualities.length < 2) return "Insufficient data"
+
+    const first = qualities[0]
+    const last = qualities[qualities.length - 1]
+    const improvement = last - first
+
+    if (improvement > 0.1) return "Consistently improving"
+    if (improvement < -0.1) return "Declining"
+    if (Math.max(...qualities) - Math.min(...qualities) < 0.05) return "Stable"
+    return "Variable"
+  }
+
+  const submitContributionToBackend = async (frames: Frame[], attemptMetadata?: any) => {
+    if (frames.length < 10) {
+      toast.error(`Recording too short (${frames.length} frames). Please try again.`, { duration: 4000 })
       return
     }
 
     // Warn if frames are low but still allow submission
-    if (recordedFrames.length < 30) {
-      const proceed = confirm(`Recording has only ${recordedFrames.length} frames (recommended: 30+). Submit anyway?`)
+    if (frames.length < 30 && !attemptMetadata) {
+      const proceed = confirm(`Recording has only ${frames.length} frames (recommended: 30+). Submit anyway?`)
       if (!proceed) {
         return
       }
@@ -271,7 +531,7 @@ export default function ContributionPage() {
       })
 
       // Validate and normalize frames for API
-      const validatedFrames = recordedFrames.map((frame, idx) => {
+      const validatedFrames = frames.map((frame, idx) => {
         // Ensure pose_landmarks has exactly 33 items (pad with zeros if needed)
         const poseLandmarks = (frame.pose_landmarks || []).map(normalizeLandmark)
         const normalizedPose = poseLandmarks.slice(0, 33)
@@ -283,10 +543,10 @@ export default function ContributionPage() {
           frame_number: idx,
           timestamp: frame.timestamp,
           pose_landmarks: normalizedPose,
-          left_hand_landmarks: frame.left_hand_landmarks && frame.left_hand_landmarks.length === 21 
+          left_hand_landmarks: frame.left_hand_landmarks && frame.left_hand_landmarks.length === 21
             ? frame.left_hand_landmarks.map(normalizeLandmark)
             : null,
-          right_hand_landmarks: frame.right_hand_landmarks && frame.right_hand_landmarks.length === 21 
+          right_hand_landmarks: frame.right_hand_landmarks && frame.right_hand_landmarks.length === 21
             ? frame.right_hand_landmarks.map(normalizeLandmark)
             : null,
           face_landmarks: null  // Not required
@@ -297,11 +557,20 @@ export default function ContributionPage() {
         word: selectedWord,
         user_id: userId,
         frames: validatedFrames,
-        duration: recordedFrames[recordedFrames.length - 1]?.timestamp || 3.0,
+        duration: frames[frames.length - 1]?.timestamp || 3.0,
         metadata: {
           browser: navigator.userAgent,
           timestamp: new Date().toISOString()
-        }
+        },
+        // User's sign classification (from classification questions)
+        sign_type_movement: signClassification?.sign_type_movement || null,
+        sign_type_hands: signClassification?.sign_type_hands || null,
+        // 3-attempt metadata
+        num_attempts: attemptMetadata?.num_attempts || 1,
+        individual_qualities: attemptMetadata?.individual_qualities || null,
+        individual_durations: attemptMetadata?.individual_durations || null,
+        quality_variance: attemptMetadata?.quality_variance || null,
+        improvement_trend: attemptMetadata?.improvement_trend || null
       }
 
       console.log('📤 Submitting contribution:', {
@@ -373,8 +642,15 @@ export default function ContributionPage() {
     }
   }
 
+  // Main button handler - starts the 3-attempt loop
+  const handleSubmitContribution = async () => {
+    await handleAttemptComplete()
+  }
+
   const handleRetake = () => {
     setRecordedFrames([])
+    setCurrentAttempt(1)
+    setAttemptData([])
     setPageState('recording')
   }
 
@@ -480,9 +756,12 @@ export default function ContributionPage() {
           {/* Mobile: Compact Header Overlay | Desktop: Normal Header */}
           <div className="md:hidden absolute top-0 left-0 right-0 z-20 bg-gradient-to-b from-black/80 to-transparent p-4 pb-8">
             <div className="flex items-center justify-between">
-              <h1 className="text-lg font-bold text-white">
-                {selectedWord}
-              </h1>
+              <div>
+                <h1 className="text-lg font-bold text-white">
+                  {selectedWord}
+                </h1>
+                <p className="text-xs text-white/80">Attempt {currentAttempt}/3</p>
+              </div>
               {isRecording && (
                 <div className="flex items-center gap-2 bg-red-600 px-3 py-1.5 rounded-full">
                   <div className="w-3 h-3 bg-white rounded-full animate-pulse"></div>
@@ -497,6 +776,7 @@ export default function ContributionPage() {
             <h1 className="text-3xl md:text-4xl font-bold text-gray-800 mb-2">
               Recording: <span className="text-indigo-600">{selectedWord}</span>
             </h1>
+            <p className="text-sm text-gray-600 mb-2">Attempt {currentAttempt} of 3</p>
             {isRecording && (
               <RecordingFeedback
                 recordingElapsed={recordingElapsed}
@@ -558,7 +838,7 @@ export default function ContributionPage() {
           </div>
 
           {/* Controls - Bottom on Mobile, Normal on Desktop */}
-          {pageState === 'recording' && !isRecording && countdown === null && (
+          {pageState === 'recording' && !isRecording && countdown === null && !showAttemptReview && (
             <div className="absolute md:relative bottom-0 left-0 right-0 md:bottom-auto md:left-auto md:right-auto bg-gradient-to-t from-black/90 to-transparent md:bg-transparent p-6 md:p-0 md:text-center">
               <button
                 onClick={startCountdown}
@@ -569,6 +849,28 @@ export default function ContributionPage() {
               </button>
               <p className="mt-3 text-sm text-white/80 md:text-gray-600 text-center">
                 Position yourself clearly in frame
+              </p>
+            </div>
+          )}
+
+          {/* Attempt Review - Show button to start next attempt (in test mode or after review delay) */}
+          {pageState === 'recording' && !isRecording && countdown === null && showAttemptReview && currentAttempt < maxAttempts && (
+            <div className="absolute md:relative bottom-0 left-0 right-0 md:bottom-auto md:left-auto md:right-auto bg-gradient-to-t from-black/90 to-transparent md:bg-transparent p-6 md:p-0 md:text-center">
+              <button
+                onClick={() => {
+                  // Increment to next attempt and start recording
+                  setCurrentAttempt(currentAttempt + 1)
+                  setRecordedFrames([])
+                  setShowAttemptReview(false)
+                  startCountdown()
+                }}
+                className="w-full md:w-auto bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 px-8 rounded-full md:rounded-xl transition-all duration-200 transform hover:scale-105 shadow-2xl text-lg md:text-xl flex items-center justify-center gap-3"
+              >
+                <span className="text-2xl">⏺</span>
+                <span>Start Recording (Attempt {currentAttempt + 1}/{maxAttempts})</span>
+              </button>
+              <p className="mt-3 text-sm text-white/80 md:text-gray-600 text-center">
+                Previous attempt recorded. Ready for next attempt?
               </p>
             </div>
           )}

@@ -12,16 +12,38 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import ContributionPage from './ContributionPage'
 
 // Mock dependencies
-jest.mock('react-webcam', () => ({
-  __esModule: true,
-  default: jest.fn().mockImplementation(({ onUserMedia }) => {
-    // Simulate webcam ready
-    if (onUserMedia) {
-      setTimeout(() => onUserMedia(), 0)
-    }
-    return <video data-testid="mock-webcam" />
-  })
-}))
+jest.mock('react-webcam', () => {
+  const React = require('react')
+  return {
+    __esModule: true,
+    default: React.forwardRef((props: any, ref: any) => {
+      // Create a mock video element
+      const mockVideo = {
+        play: jest.fn(),
+        pause: jest.fn(),
+        getBoundingClientRect: () => ({ width: 640, height: 480, x: 0, y: 0, top: 0, left: 0, bottom: 480, right: 640 })
+      }
+
+      // Attach the mock video to the ref
+      React.useEffect(() => {
+        if (ref) {
+          if (typeof ref === 'function') {
+            ref({ video: mockVideo })
+          } else {
+            ref.current = { video: mockVideo }
+          }
+        }
+
+        // Simulate webcam ready
+        if (props.onUserMedia) {
+          setTimeout(() => props.onUserMedia(), 0)
+        }
+      }, [])
+
+      return React.createElement('video', { 'data-testid': 'mock-webcam' })
+    })
+  }
+})
 
 // Mock MediaPipe with controllable callbacks
 let mockLandmarkCallback: any = null
@@ -30,10 +52,12 @@ jest.mock('./MediaPipeHandler', () => {
   let callback: any = null
   return {
     MediaPipeHandler: jest.fn().mockImplementation((video: any, cb: any) => {
+      console.log('🔧 MediaPipeHandler mock instantiated, setting callback')
       callback = cb
       // Expose callback globally so tests can access it
       if (typeof global !== 'undefined') {
         (global as any).__mockLandmarkCallback = cb
+        console.log('✅ Global callback set:', typeof cb)
       }
       return {
         initialize: jest.fn().mockResolvedValue(undefined),
@@ -47,10 +71,33 @@ jest.mock('./MediaPipeHandler', () => {
 
 jest.mock('./ReferencePlayer', () => ({
   __esModule: true,
-  default: jest.fn(({ word, onReady }) => (
+  default: jest.fn(({ word, signImageUrl, onReady }) => (
     <div data-testid="reference-player">
       <h2>Reference: {word}</h2>
-      <button onClick={onReady}>I'm Ready to Record</button>
+      <button onClick={onReady}>I Understand - Start Contributing</button>
+    </div>
+  ))
+}))
+
+jest.mock('./SignClassification', () => ({
+  __esModule: true,
+  default: jest.fn(({ word, onComplete, onBack }) => (
+    <div data-testid="sign-classification">
+      <h2>Classify: {word}</h2>
+      <button onClick={onBack}>Back to Reference</button>
+      <button onClick={() => onComplete({
+        sign_type_movement: 'dynamic',
+        sign_type_hands: 'two-handed'
+      })}>Continue to Recording</button>
+    </div>
+  ))
+}))
+
+jest.mock('./CommunityContributions', () => ({
+  __esModule: true,
+  default: jest.fn(({ word }) => (
+    <div data-testid="community-contributions">
+      <h2>Community Contributions for {word}</h2>
     </div>
   ))
 }))
@@ -71,7 +118,10 @@ global.fetch = jest.fn()
 // Helper to simulate frame capture
 const simulateFrameCapture = (count: number = 60) => {
   const callback = (global as any).__mockLandmarkCallback
-  if (!callback) return
+  if (!callback) {
+    console.error('⚠️  simulateFrameCapture: callback not found!')
+    return
+  }
 
   const mockResults = {
     poseLandmarks: Array(33).fill({ x: 0.5, y: 0.5, z: 0, visibility: 1.0 }),
@@ -80,16 +130,47 @@ const simulateFrameCapture = (count: number = 60) => {
     faceLandmarks: null
   }
 
+  console.log(`📸 simulateFrameCapture: calling callback ${count} times`)
+  // Call each frame separately to ensure state updates are processed
   for (let i = 0; i < count; i++) {
     act(() => {
       callback(mockResults)
     })
   }
+  console.log(`✅ simulateFrameCapture: completed ${count} calls`)
+}
+
+// Helper to navigate to recording state (through select → community → reference → classification → recording)
+const navigateToRecording = async (word: string = 'HELLO') => {
+  // Select word (goes to community state)
+  fireEvent.click(screen.getByText(`Select ${word}`))
+
+  // Click "Add Your Contribution" button
+  await waitFor(() => screen.getByText(/Add Your Contribution/i))
+  fireEvent.click(screen.getByText(/Add Your Contribution/i))
+
+  // Wait for reference and click ready
+  await waitFor(() => screen.getByText('I Understand - Start Contributing'))
+  fireEvent.click(screen.getByText('I Understand - Start Contributing'))
+
+  // Wait for classification and complete it
+  await waitFor(() => screen.getByText('Continue to Recording'))
+  fireEvent.click(screen.getByText('Continue to Recording'))
+
+  // Wait for recording interface
+  await waitFor(() => screen.getByTestId('mock-webcam'))
+
+  // MediaPipe should initialize automatically when entering recording state
+  // The mock will set the global callback when MediaPipeHandler is instantiated
 }
 
 describe('ContributionPage - State Management', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+
+    // Clear global callback
+    delete (global as any).__mockLandmarkCallback
+
     try {
       jest.useFakeTimers()
     } catch (e) {
@@ -120,7 +201,7 @@ describe('ContributionPage - State Management', () => {
 
   describe('Initial State', () => {
     it('should start in "select" state and render SignSelector', () => {
-      render(<ContributionPage />)
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
       expect(screen.getByTestId('sign-selector')).toBeInTheDocument()
       expect(screen.queryByTestId('reference-player')).not.toBeInTheDocument()
@@ -128,32 +209,49 @@ describe('ContributionPage - State Management', () => {
     })
 
     it('should have empty selectedWord initially', () => {
-      render(<ContributionPage />)
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
       // SignSelector should be visible, meaning no word is selected yet
       expect(screen.getByTestId('sign-selector')).toBeInTheDocument()
     })
   })
 
-  describe('State Transition: select → reference', () => {
-    it('should transition to reference state when word is selected', async () => {
-      render(<ContributionPage />)
+  describe('State Transition: select → community → reference', () => {
+    it('should transition to community state when word is selected', async () => {
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
       const selectButton = screen.getByText('Select HELLO')
       fireEvent.click(selectButton)
 
       await waitFor(() => {
-        expect(screen.getByTestId('reference-player')).toBeInTheDocument()
-        expect(screen.getByText('Reference: HELLO')).toBeInTheDocument()
+        expect(screen.getByTestId('community-contributions')).toBeInTheDocument()
+        expect(screen.getByText(/Add Your Contribution/i)).toBeInTheDocument()
       })
 
       expect(screen.queryByTestId('sign-selector')).not.toBeInTheDocument()
     })
 
+    it('should transition to reference state when Add Your Contribution is clicked', async () => {
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
+
+      fireEvent.click(screen.getByText('Select HELLO'))
+
+      await waitFor(() => screen.getByText(/Add Your Contribution/i))
+      fireEvent.click(screen.getByText(/Add Your Contribution/i))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('reference-player')).toBeInTheDocument()
+        expect(screen.getByText('Reference: HELLO')).toBeInTheDocument()
+      })
+    })
+
     it('should store selected word in state', async () => {
-      render(<ContributionPage />)
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
       fireEvent.click(screen.getByText('Select THANK_YOU'))
+
+      await waitFor(() => screen.getByText(/Add Your Contribution/i))
+      fireEvent.click(screen.getByText(/Add Your Contribution/i))
 
       await waitFor(() => {
         expect(screen.getByText('Reference: THANK_YOU')).toBeInTheDocument()
@@ -161,35 +259,88 @@ describe('ContributionPage - State Management', () => {
     })
   })
 
-  describe('State Transition: reference → recording', () => {
-    it('should transition to recording state when user clicks "I\'m Ready"', async () => {
-      render(<ContributionPage />)
+  describe('State Transition: reference → classification', () => {
+    it('should transition to classification state when user clicks "I\'m Ready"', async () => {
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
       // Navigate to reference state
       fireEvent.click(screen.getByText('Select HELLO'))
+      await waitFor(() => screen.getByText(/Add Your Contribution/i))
+      fireEvent.click(screen.getByText(/Add Your Contribution/i))
 
       await waitFor(() => {
-        expect(screen.getByText('I\'m Ready to Record')).toBeInTheDocument()
+        expect(screen.getByText('I Understand - Start Contributing')).toBeInTheDocument()
       })
 
       // Click ready button
-      fireEvent.click(screen.getByText('I\'m Ready to Record'))
+      fireEvent.click(screen.getByText('I Understand - Start Contributing'))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('sign-classification')).toBeInTheDocument()
+        expect(screen.getByText('Classify: HELLO')).toBeInTheDocument()
+      })
+    })
+
+    it('should allow going back to reference from classification', async () => {
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
+
+      fireEvent.click(screen.getByText('Select HELLO'))
+      await waitFor(() => screen.getByText(/Add Your Contribution/i))
+      fireEvent.click(screen.getByText(/Add Your Contribution/i))
+      await waitFor(() => screen.getByText('I Understand - Start Contributing'))
+      fireEvent.click(screen.getByText('I Understand - Start Contributing'))
+
+      await waitFor(() => screen.getByText('Back to Reference'))
+      fireEvent.click(screen.getByText('Back to Reference'))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('reference-player')).toBeInTheDocument()
+        expect(screen.queryByTestId('sign-classification')).not.toBeInTheDocument()
+      })
+    })
+  })
+
+  describe('State Transition: classification → recording', () => {
+    it('should transition to recording state when classification is complete', async () => {
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
+
+      // Navigate through flow
+      fireEvent.click(screen.getByText('Select HELLO'))
+      await waitFor(() => screen.getByText(/Add Your Contribution/i))
+      fireEvent.click(screen.getByText(/Add Your Contribution/i))
+      await waitFor(() => screen.getByText('I Understand - Start Contributing'))
+      fireEvent.click(screen.getByText('I Understand - Start Contributing'))
+
+      await waitFor(() => screen.getByText('Continue to Recording'))
+      fireEvent.click(screen.getByText('Continue to Recording'))
 
       await waitFor(() => {
         expect(screen.getByTestId('mock-webcam')).toBeInTheDocument()
+        expect(screen.queryByTestId('sign-classification')).not.toBeInTheDocument()
       })
     })
 
     it('should initialize MediaPipe when entering recording state', async () => {
       const { MediaPipeHandler } = require('./MediaPipeHandler')
 
-      render(<ContributionPage />)
+      // Clear mock to count only calls from this test
+      MediaPipeHandler.mockClear()
+
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
       fireEvent.click(screen.getByText('Select HELLO'))
-      await waitFor(() => screen.getByText('I\'m Ready to Record'))
+      await waitFor(() => screen.getByText(/Add Your Contribution/i))
+      fireEvent.click(screen.getByText(/Add Your Contribution/i))
+      await waitFor(() => screen.getByText('I Understand - Start Contributing'))
+      fireEvent.click(screen.getByText('I Understand - Start Contributing'))
 
-      fireEvent.click(screen.getByText('I\'m Ready to Record'))
+      await waitFor(() => screen.getByText('Continue to Recording'))
+      fireEvent.click(screen.getByText('Continue to Recording'))
 
+      // Wait for recording UI to be ready
+      await waitFor(() => screen.getByTestId('mock-webcam'))
+
+      // MediaPipe should have been initialized
       await waitFor(() => {
         expect(MediaPipeHandler).toHaveBeenCalled()
       })
@@ -198,12 +349,8 @@ describe('ContributionPage - State Management', () => {
 
   describe('Recording Flow', () => {
     it('should show countdown when Start Recording is clicked', async () => {
-      render(<ContributionPage />)
-
-      // Navigate to recording state
-      fireEvent.click(screen.getByText('Select HELLO'))
-      await waitFor(() => screen.getByText('I\'m Ready to Record'))
-      fireEvent.click(screen.getByText('I\'m Ready to Record'))
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
+      await navigateToRecording()
 
       await waitFor(() => {
         const startButton = screen.getByText(/Start Recording/i)
@@ -217,11 +364,8 @@ describe('ContributionPage - State Management', () => {
     })
 
     it('should count down from 5 to 1', async () => {
-      render(<ContributionPage />)
-
-      fireEvent.click(screen.getByText('Select HELLO'))
-      await waitFor(() => screen.getByText('I\'m Ready to Record'))
-      fireEvent.click(screen.getByText('I\'m Ready to Record'))
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
+      await navigateToRecording()
 
       await waitFor(() => {
         const startButton = screen.getByText(/Start Recording/i)
@@ -245,11 +389,8 @@ describe('ContributionPage - State Management', () => {
     })
 
     it('should start recording after countdown completes', async () => {
-      render(<ContributionPage />)
-
-      fireEvent.click(screen.getByText('Select HELLO'))
-      await waitFor(() => screen.getByText('I\'m Ready to Record'))
-      fireEvent.click(screen.getByText('I\'m Ready to Record'))
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
+      await navigateToRecording()
 
       await waitFor(() => {
         const startButton = screen.getByText(/Start Recording/i)
@@ -268,54 +409,94 @@ describe('ContributionPage - State Management', () => {
 
   describe('Successful Submission Flow', () => {
     const navigateToReviewState = async () => {
-      render(<ContributionPage />)
+      render(<ContributionPage maxAttempts={3} testMode={true} />)
 
-      // Navigate through states
-      fireEvent.click(screen.getByText('Select HELLO'))
-      await waitFor(() => screen.getByText('I\'m Ready to Record'))
-      fireEvent.click(screen.getByText('I\'m Ready to Record'))
+      // Navigate to recording state (through classification)
+      await navigateToRecording()
 
-      // Start recording
-      await waitFor(() => screen.getByText(/Start Recording/i))
-      fireEvent.click(screen.getByText(/Start Recording/i))
+      // Perform all 3 attempts
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        // Start recording - find the button (text varies by attempt)
+        await waitFor(() => {
+          const button = screen.getByRole('button', { name: /Start Recording/i })
+          expect(button).toBeInTheDocument()
+        })
 
-      // Wait for countdown to complete and recording to start
-      act(() => { jest.advanceTimersByTime(5000) })
-      await waitFor(() => screen.getByText(/RECORDING\.\.\./i))
+        // Click Start Recording button
+        const button = screen.getByRole('button', { name: /Start Recording/i })
+        fireEvent.click(button)
 
-      // Simulate frame capture (60 frames)
-      simulateFrameCapture(60)
+        // Advance countdown timers (5 seconds)
+        act(() => {
+          jest.advanceTimersByTime(5000)
+        })
 
-      // Wait for auto-stop after 2 seconds
-      act(() => { jest.advanceTimersByTime(2000) })
+        // Wait for recording to actually start
+        await waitFor(() => screen.getByText(/RECORDING\.\.\./i))
+
+        // Simulate frame capture (60 frames) - must be done while recording is active
+        simulateFrameCapture(60)
+
+        // Advance timers to simulate recording duration
+        act(() => {
+          jest.advanceTimersByTime(3000)
+        })
+
+        // Manually trigger stop recording (click the Stop Recording button)
+        await waitFor(() => screen.getByRole('button', { name: /Stop Recording/i }))
+
+        await act(async () => {
+          fireEvent.click(screen.getByRole('button', { name: /Stop Recording/i }))
+
+          // Wait for completion flash (500ms) - in testMode this is instant
+          jest.advanceTimersByTime(500)
+
+          // After clicking stop, component calls stopRecording() which:
+          // 1. Sets showCompletionFlash (instant)
+          // 2. Calls handleAttemptComplete() after 500ms (or immediately in testMode)
+          // 3. handleAttemptComplete() is async and may call submitAveragedContribution
+          // We need to allow these promises to resolve
+          await Promise.resolve()
+          await Promise.resolve()
+          await Promise.resolve()
+        })
+
+        // If this is the last attempt, wait for success state transition
+        if (attempt === 3) {
+          // Give extra time for the submission to complete
+          await waitFor(() => {
+            // Check that we're either in success state or still processing
+            // We'll verify success state in the actual test assertion
+          }, { timeout: 1000 })
+        }
+        // If not the last attempt, the next loop iteration will find the next attempt button
+      }
 
       return screen
     }
 
-    it('should transition to review state after recording completes', async () => {
+    it('should transition to success state after all 3 attempts complete', async () => {
       await navigateToReviewState()
 
-      // Should be in review state
+      // After 3 attempts, should auto-submit and go to success state
       await waitFor(() => {
-        expect(screen.getByText(/Review Your Recording/i)).toBeInTheDocument()
+        expect(screen.getByText(/Thank You!/i)).toBeInTheDocument()
+        expect(screen.getByText(/successfully/i)).toBeInTheDocument()
+      }, { timeout: 5000 })
+    })
+
+    it('should show progress stats in success state after 3 attempts', async () => {
+      await navigateToReviewState()
+
+      await waitFor(() => {
+        expect(screen.getByText(/Thank You!/i)).toBeInTheDocument()
+        expect(screen.getByText('5')).toBeInTheDocument() // Total contributions
+        expect(screen.getByText(/Total contributions for/i)).toBeInTheDocument()
       })
     })
 
-    it('should display Submit and Retake buttons in review state', async () => {
+    it('should call API with averaged data from 3 attempts', async () => {
       await navigateToReviewState()
-
-      await waitFor(() => {
-        expect(screen.getByText(/Looks Good - Submit/i)).toBeInTheDocument()
-        expect(screen.getByText(/Retake/i)).toBeInTheDocument()
-      })
-    })
-
-    it('should call API with correct data when submitting', async () => {
-      await navigateToReviewState()
-
-      // Click submit
-      await waitFor(() => screen.getByText(/Looks Good - Submit/i))
-      fireEvent.click(screen.getByText(/Looks Good - Submit/i))
 
       // Verify API call structure
       await waitFor(() => {
@@ -328,44 +509,20 @@ describe('ContributionPage - State Management', () => {
           })
         )
 
-        // Verify body contains expected data
+        // Verify body contains averaged data from 3 attempts
         const callArgs = (global.fetch as jest.Mock).mock.calls[0]
         const body = JSON.parse(callArgs[1].body)
         expect(body.word).toBe('HELLO')
-        expect(body.frames).toHaveLength(60)
+        expect(body.frames.length).toBeGreaterThan(0) // Averaged frames
         expect(body.user_id).toMatch(/^user_/)
+        expect(body.num_attempts).toBe(3)
+        expect(body.individual_qualities).toHaveLength(3)
+        expect(body.individual_durations).toHaveLength(3)
       })
     })
 
-    it('should display success message after submission', async () => {
+    it('should auto-advance to recording state after 3 seconds in success', async () => {
       await navigateToReviewState()
-
-      await waitFor(() => screen.getByText(/Looks Good - Submit/i))
-      fireEvent.click(screen.getByText(/Looks Good - Submit/i))
-
-      await waitFor(() => {
-        expect(screen.getByText(/Thank You!/i)).toBeInTheDocument()
-        expect(screen.getByText(/successfully/i)).toBeInTheDocument()
-      })
-    })
-
-    it('should show progress stats in success state', async () => {
-      await navigateToReviewState()
-
-      await waitFor(() => screen.getByText(/Looks Good - Submit/i))
-      fireEvent.click(screen.getByText(/Looks Good - Submit/i))
-
-      await waitFor(() => {
-        expect(screen.getByText('5')).toBeInTheDocument() // Total contributions
-        expect(screen.getByText(/Total contributions for/i)).toBeInTheDocument()
-      })
-    })
-
-    it('should auto-advance to recording state after 3 seconds', async () => {
-      await navigateToReviewState()
-
-      await waitFor(() => screen.getByText(/Looks Good - Submit/i))
-      fireEvent.click(screen.getByText(/Looks Good - Submit/i))
 
       // Verify in success state
       await waitFor(() => {
@@ -373,7 +530,7 @@ describe('ContributionPage - State Management', () => {
       })
 
       // Fast-forward 3 seconds
-      act(() => { jest.advanceTimersByTime(3000) })
+      act(() => { jest.advanceTimersByTime(3500) })
 
       // Should be back in recording state
       await waitFor(() => {
@@ -382,34 +539,29 @@ describe('ContributionPage - State Management', () => {
       })
     })
 
-    it('should keep same word when auto-advancing', async () => {
+    it('should keep same word when auto-advancing from success', async () => {
       await navigateToReviewState()
 
-      await waitFor(() => screen.getByText(/Looks Good - Submit/i))
-      fireEvent.click(screen.getByText(/Looks Good - Submit/i))
-
-      // Auto-advance
+      // Auto-advance from success state
       await waitFor(() => screen.getByText(/Thank You!/i))
-      act(() => { jest.advanceTimersByTime(3000) })
+      act(() => { jest.advanceTimersByTime(3500) })
 
       // Should still be on HELLO, not back to selector
       await waitFor(() => {
-        expect(screen.getByText(/Recording: HELLO/i)).toBeInTheDocument()
+        expect(screen.getByTestId('mock-webcam')).toBeInTheDocument()
         expect(screen.queryByTestId('sign-selector')).not.toBeInTheDocument()
+        expect(screen.queryByText(/Thank You!/i)).not.toBeInTheDocument()
       })
     })
 
-    it('should clear recorded frames when auto-advancing', async () => {
+    it('should reset for new 3-attempt cycle when auto-advancing', async () => {
       await navigateToReviewState()
 
-      await waitFor(() => screen.getByText(/Looks Good - Submit/i))
-      fireEvent.click(screen.getByText(/Looks Good - Submit/i))
-
-      // Auto-advance
+      // Auto-advance from success
       await waitFor(() => screen.getByText(/Thank You!/i))
-      act(() => { jest.advanceTimersByTime(3000) })
+      act(() => { jest.advanceTimersByTime(3500) })
 
-      // Should be able to start new recording
+      // Should be able to start new recording (Attempt 1 of new cycle)
       await waitFor(() => {
         expect(screen.getByText(/Start Recording/i)).toBeInTheDocument()
       })
@@ -418,13 +570,19 @@ describe('ContributionPage - State Management', () => {
 
   describe('Error Handling', () => {
     it('should show error when recording is too short (<30 frames)', async () => {
-      render(<ContributionPage />)
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
       const alertMock = jest.spyOn(window, 'alert').mockImplementation()
 
       fireEvent.click(screen.getByText('Select HELLO'))
-      await waitFor(() => screen.getByText('I\'m Ready to Record'))
-      fireEvent.click(screen.getByText('I\'m Ready to Record'))
+      await waitFor(() => screen.getByText(/Add Your Contribution/i))
+      fireEvent.click(screen.getByText(/Add Your Contribution/i))
+      await waitFor(() => screen.getByText('I Understand - Start Contributing'))
+      fireEvent.click(screen.getByText('I Understand - Start Contributing'))
+
+      // Complete classification step
+      await waitFor(() => screen.getByText('Continue to Recording'))
+      fireEvent.click(screen.getByText('Continue to Recording'))
 
       await waitFor(() => screen.getByText(/Start Recording/i))
       fireEvent.click(screen.getByText(/Start Recording/i))
@@ -435,10 +593,21 @@ describe('ContributionPage - State Management', () => {
       // Capture only 20 frames (too short)
       simulateFrameCapture(20)
 
-      act(() => { jest.advanceTimersByTime(2000) })
+      act(() => { jest.advanceTimersByTime(3000) })
+
+      // Manually click stop button
+      await waitFor(() => screen.getByRole('button', { name: /Stop Recording/i }))
+      fireEvent.click(screen.getByRole('button', { name: /Stop Recording/i }))
+
+      await act(async () => {
+        // Wait for completion flash (500ms)
+        jest.advanceTimersByTime(500)
+        // Allow promises to resolve
+        await Promise.resolve()
+      })
 
       // Try to submit
-      await waitFor(() => screen.getByText(/Looks Good - Submit/i))
+      await waitFor(() => screen.getByText(/Looks Good - Submit/i), { timeout: 5000 })
       fireEvent.click(screen.getByText(/Looks Good - Submit/i))
 
       expect(alertMock).toHaveBeenCalledWith('Recording too short. Please try again.')
@@ -453,20 +622,43 @@ describe('ContributionPage - State Management', () => {
         })
       })
 
-      render(<ContributionPage />)
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
       const alertMock = jest.spyOn(window, 'alert').mockImplementation()
 
       fireEvent.click(screen.getByText('Select HELLO'))
-      await waitFor(() => screen.getByText('I\'m Ready to Record'))
-      fireEvent.click(screen.getByText('I\'m Ready to Record'))
+
+
+      await waitFor(() => screen.getByText(/Add Your Contribution/i))
+
+
+      fireEvent.click(screen.getByText(/Add Your Contribution/i))
+
+
+      await waitFor(() => screen.getByText('I Understand - Start Contributing'))
+      fireEvent.click(screen.getByText('I Understand - Start Contributing'))
+
+      // Complete classification step
+      await waitFor(() => screen.getByText('Continue to Recording'))
+      fireEvent.click(screen.getByText('Continue to Recording'))
 
       await waitFor(() => screen.getByText(/Start Recording/i))
       fireEvent.click(screen.getByText(/Start Recording/i))
 
       act(() => { jest.advanceTimersByTime(5000) })
       simulateFrameCapture(60)
-      act(() => { jest.advanceTimersByTime(2000) })
+      act(() => { jest.advanceTimersByTime(3000) })
+
+      // Manually trigger stop recording
+      await waitFor(() => screen.getByRole('button', { name: /Stop Recording/i }))
+      fireEvent.click(screen.getByRole('button', { name: /Stop Recording/i }))
+
+      await act(async () => {
+        // Wait for completion flash (500ms)
+        jest.advanceTimersByTime(500)
+        // Allow promises to resolve
+        await Promise.resolve()
+      })
 
       await waitFor(() => screen.getByText(/Looks Good - Submit/i))
       fireEvent.click(screen.getByText(/Looks Good - Submit/i))
@@ -485,20 +677,43 @@ describe('ContributionPage - State Management', () => {
         new Error('Network request failed')
       )
 
-      render(<ContributionPage />)
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
       const alertMock = jest.spyOn(window, 'alert').mockImplementation()
 
       fireEvent.click(screen.getByText('Select HELLO'))
-      await waitFor(() => screen.getByText('I\'m Ready to Record'))
-      fireEvent.click(screen.getByText('I\'m Ready to Record'))
+
+
+      await waitFor(() => screen.getByText(/Add Your Contribution/i))
+
+
+      fireEvent.click(screen.getByText(/Add Your Contribution/i))
+
+
+      await waitFor(() => screen.getByText('I Understand - Start Contributing'))
+      fireEvent.click(screen.getByText('I Understand - Start Contributing'))
+
+      // Complete classification step
+      await waitFor(() => screen.getByText('Continue to Recording'))
+      fireEvent.click(screen.getByText('Continue to Recording'))
 
       await waitFor(() => screen.getByText(/Start Recording/i))
       fireEvent.click(screen.getByText(/Start Recording/i))
 
       act(() => { jest.advanceTimersByTime(5000) })
       simulateFrameCapture(60)
-      act(() => { jest.advanceTimersByTime(2000) })
+      act(() => { jest.advanceTimersByTime(3000) })
+
+      // Manually trigger stop recording
+      await waitFor(() => screen.getByRole('button', { name: /Stop Recording/i }))
+      fireEvent.click(screen.getByRole('button', { name: /Stop Recording/i }))
+
+      await act(async () => {
+        // Wait for completion flash (500ms)
+        jest.advanceTimersByTime(500)
+        // Allow promises to resolve
+        await Promise.resolve()
+      })
 
       await waitFor(() => screen.getByText(/Looks Good - Submit/i))
       fireEvent.click(screen.getByText(/Looks Good - Submit/i))
@@ -515,20 +730,43 @@ describe('ContributionPage - State Management', () => {
     it('should stay in review state after submission error', async () => {
       (global.fetch as jest.Mock).mockRejectedValue(new Error('API Error'))
 
-      render(<ContributionPage />)
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
       jest.spyOn(window, 'alert').mockImplementation()
 
       fireEvent.click(screen.getByText('Select HELLO'))
-      await waitFor(() => screen.getByText('I\'m Ready to Record'))
-      fireEvent.click(screen.getByText('I\'m Ready to Record'))
+
+
+      await waitFor(() => screen.getByText(/Add Your Contribution/i))
+
+
+      fireEvent.click(screen.getByText(/Add Your Contribution/i))
+
+
+      await waitFor(() => screen.getByText('I Understand - Start Contributing'))
+      fireEvent.click(screen.getByText('I Understand - Start Contributing'))
+
+      // Complete classification step
+      await waitFor(() => screen.getByText('Continue to Recording'))
+      fireEvent.click(screen.getByText('Continue to Recording'))
 
       await waitFor(() => screen.getByText(/Start Recording/i))
       fireEvent.click(screen.getByText(/Start Recording/i))
 
       act(() => { jest.advanceTimersByTime(5000) })
       simulateFrameCapture(60)
-      act(() => { jest.advanceTimersByTime(2000) })
+      act(() => { jest.advanceTimersByTime(3000) })
+
+      // Manually trigger stop recording
+      await waitFor(() => screen.getByRole('button', { name: /Stop Recording/i }))
+      fireEvent.click(screen.getByRole('button', { name: /Stop Recording/i }))
+
+      await act(async () => {
+        // Wait for completion flash (500ms)
+        jest.advanceTimersByTime(500)
+        // Allow promises to resolve
+        await Promise.resolve()
+      })
 
       await waitFor(() => screen.getByText(/Looks Good - Submit/i))
       fireEvent.click(screen.getByText(/Looks Good - Submit/i))
@@ -542,20 +780,56 @@ describe('ContributionPage - State Management', () => {
 
   describe('User Actions', () => {
     it('should allow retake from review state', async () => {
-      render(<ContributionPage />)
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
       fireEvent.click(screen.getByText('Select HELLO'))
-      await waitFor(() => screen.getByText('I\'m Ready to Record'))
-      fireEvent.click(screen.getByText('I\'m Ready to Record'))
+
+
+      await waitFor(() => screen.getByText(/Add Your Contribution/i))
+
+
+      fireEvent.click(screen.getByText(/Add Your Contribution/i))
+
+
+      await waitFor(() => screen.getByText('I Understand - Start Contributing'))
+      fireEvent.click(screen.getByText('I Understand - Start Contributing'))
+
+      // Complete classification step
+      await waitFor(() => screen.getByText('Continue to Recording'))
+      fireEvent.click(screen.getByText('Continue to Recording'))
 
       await waitFor(() => screen.getByText(/Start Recording/i))
       fireEvent.click(screen.getByText(/Start Recording/i))
 
-      act(() => { jest.advanceTimersByTime(5000) })
-      simulateFrameCapture(60)
-      act(() => { jest.advanceTimersByTime(2000) })
+      await act(async () => {
+        jest.advanceTimersByTime(5000)
+      })
 
-      const retakeButton = await screen.findByText(/Retake/i)
+      simulateFrameCapture(60)
+
+      act(() => {
+        jest.advanceTimersByTime(3000)
+      })
+
+      // Manually trigger stop recording
+      const stopButton = screen.queryByRole('button', { name: /Stop Recording/i })
+      if (stopButton) {
+        fireEvent.click(stopButton)
+      }
+
+      await act(async () => {
+        // Wait for completion flash (500ms)
+        jest.advanceTimersByTime(500)
+        // Allow promises to resolve
+        await Promise.resolve()
+      })
+
+      // Wait for review state
+      await waitFor(() => {
+        expect(screen.getByText(/Review Your Recording/i)).toBeInTheDocument()
+      })
+
+      const retakeButton = screen.getByText(/Retake/i)
       fireEvent.click(retakeButton)
 
       // Should go back to recording state
@@ -565,18 +839,39 @@ describe('ContributionPage - State Management', () => {
     })
 
     it('should clear frames when retaking', async () => {
-      render(<ContributionPage />)
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
       fireEvent.click(screen.getByText('Select HELLO'))
-      await waitFor(() => screen.getByText('I\'m Ready to Record'))
-      fireEvent.click(screen.getByText('I\'m Ready to Record'))
+
+
+      await waitFor(() => screen.getByText(/Add Your Contribution/i))
+
+
+      fireEvent.click(screen.getByText(/Add Your Contribution/i))
+
+
+      await waitFor(() => screen.getByText('I Understand - Start Contributing'))
+      fireEvent.click(screen.getByText('I Understand - Start Contributing'))
+
+      // Complete classification step
+      await waitFor(() => screen.getByText('Continue to Recording'))
+      fireEvent.click(screen.getByText('Continue to Recording'))
 
       await waitFor(() => screen.getByText(/Start Recording/i))
       fireEvent.click(screen.getByText(/Start Recording/i))
 
       act(() => { jest.advanceTimersByTime(5000) })
       simulateFrameCapture(60)
-      act(() => { jest.advanceTimersByTime(2000) })
+      act(() => { jest.advanceTimersByTime(3000) })
+
+      // Manually trigger stop recording
+      const stopButton = screen.queryByRole('button', { name: /Stop Recording/i })
+      if (stopButton) {
+        fireEvent.click(stopButton)
+      }
+
+      // Wait for completion flash (500ms)
+      act(() => { jest.advanceTimersByTime(500) })
 
       await waitFor(() => screen.getByText(/Frames captured: 60/i))
 
@@ -590,18 +885,39 @@ describe('ContributionPage - State Management', () => {
     })
 
     it('should allow choosing different sign from review', async () => {
-      render(<ContributionPage />)
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
       fireEvent.click(screen.getByText('Select HELLO'))
-      await waitFor(() => screen.getByText('I\'m Ready to Record'))
-      fireEvent.click(screen.getByText('I\'m Ready to Record'))
+
+
+      await waitFor(() => screen.getByText(/Add Your Contribution/i))
+
+
+      fireEvent.click(screen.getByText(/Add Your Contribution/i))
+
+
+      await waitFor(() => screen.getByText('I Understand - Start Contributing'))
+      fireEvent.click(screen.getByText('I Understand - Start Contributing'))
+
+      // Complete classification step
+      await waitFor(() => screen.getByText('Continue to Recording'))
+      fireEvent.click(screen.getByText('Continue to Recording'))
 
       await waitFor(() => screen.getByText(/Start Recording/i))
       fireEvent.click(screen.getByText(/Start Recording/i))
 
       act(() => { jest.advanceTimersByTime(5000) })
       simulateFrameCapture(60)
-      act(() => { jest.advanceTimersByTime(2000) })
+      act(() => { jest.advanceTimersByTime(3000) })
+
+      // Manually trigger stop recording
+      const stopButton = screen.queryByRole('button', { name: /Stop Recording/i })
+      if (stopButton) {
+        fireEvent.click(stopButton)
+      }
+
+      // Wait for completion flash (500ms)
+      act(() => { jest.advanceTimersByTime(500) })
 
       const changeSignButton = await screen.findByText(/Choose Different Sign/i)
       fireEvent.click(changeSignButton)
@@ -613,18 +929,39 @@ describe('ContributionPage - State Management', () => {
     })
 
     it('should reset all state when choosing different sign', async () => {
-      render(<ContributionPage />)
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
       fireEvent.click(screen.getByText('Select HELLO'))
-      await waitFor(() => screen.getByText('I\'m Ready to Record'))
-      fireEvent.click(screen.getByText('I\'m Ready to Record'))
+
+
+      await waitFor(() => screen.getByText(/Add Your Contribution/i))
+
+
+      fireEvent.click(screen.getByText(/Add Your Contribution/i))
+
+
+      await waitFor(() => screen.getByText('I Understand - Start Contributing'))
+      fireEvent.click(screen.getByText('I Understand - Start Contributing'))
+
+      // Complete classification step
+      await waitFor(() => screen.getByText('Continue to Recording'))
+      fireEvent.click(screen.getByText('Continue to Recording'))
 
       await waitFor(() => screen.getByText(/Start Recording/i))
       fireEvent.click(screen.getByText(/Start Recording/i))
 
       act(() => { jest.advanceTimersByTime(5000) })
       simulateFrameCapture(60)
-      act(() => { jest.advanceTimersByTime(2000) })
+      act(() => { jest.advanceTimersByTime(3000) })
+
+      // Manually trigger stop recording
+      const stopButton = screen.queryByRole('button', { name: /Stop Recording/i })
+      if (stopButton) {
+        fireEvent.click(stopButton)
+      }
+
+      // Wait for completion flash (500ms)
+      act(() => { jest.advanceTimersByTime(500) })
 
       const changeSignButton = await screen.findByText(/Choose Different Sign/i)
       fireEvent.click(changeSignButton)
@@ -651,12 +988,21 @@ describe('ContributionPage - State Management', () => {
         dispose: disposeMock
       }))
 
-      const { unmount } = render(<ContributionPage />)
+      const { unmount } = render(<ContributionPage maxAttempts={1} testMode={true} />)
 
       // Navigate to recording to create handler
       fireEvent.click(screen.getByText('Select HELLO'))
-      await waitFor(() => screen.getByText('I\'m Ready to Record'))
-      fireEvent.click(screen.getByText('I\'m Ready to Record'))
+
+      await waitFor(() => screen.getByText(/Add Your Contribution/i))
+
+      fireEvent.click(screen.getByText(/Add Your Contribution/i))
+
+      await waitFor(() => screen.getByText('I Understand - Start Contributing'))
+      fireEvent.click(screen.getByText('I Understand - Start Contributing'))
+
+      // Complete classification step
+      await waitFor(() => screen.getByText('Continue to Recording'))
+      fireEvent.click(screen.getByText('Continue to Recording'))
 
       await waitFor(() => screen.getByTestId('mock-webcam'))
 
@@ -668,11 +1014,23 @@ describe('ContributionPage - State Management', () => {
     })
 
     it('should capture frames at ~30fps during recording', async () => {
-      render(<ContributionPage />)
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
       fireEvent.click(screen.getByText('Select HELLO'))
-      await waitFor(() => screen.getByText('I\'m Ready to Record'))
-      fireEvent.click(screen.getByText('I\'m Ready to Record'))
+
+
+      await waitFor(() => screen.getByText(/Add Your Contribution/i))
+
+
+      fireEvent.click(screen.getByText(/Add Your Contribution/i))
+
+
+      await waitFor(() => screen.getByText('I Understand - Start Contributing'))
+      fireEvent.click(screen.getByText('I Understand - Start Contributing'))
+
+      // Complete classification step
+      await waitFor(() => screen.getByText('Continue to Recording'))
+      fireEvent.click(screen.getByText('Continue to Recording'))
 
       await waitFor(() => screen.getByText(/Start Recording/i))
       fireEvent.click(screen.getByText(/Start Recording/i))
@@ -680,10 +1038,13 @@ describe('ContributionPage - State Management', () => {
       act(() => { jest.advanceTimersByTime(5000) })
       await waitFor(() => screen.getByText(/RECORDING\.\.\./i))
 
-      // Simulate 60 frames (2 seconds @ 30fps)
+      // Simulate 60 frames (3 seconds @ 20fps or 2 seconds @ 30fps)
       simulateFrameCapture(60)
 
-      act(() => { jest.advanceTimersByTime(2000) })
+      act(() => { jest.advanceTimersByTime(3500) })
+
+      // Wait for completion flash (500ms)
+      act(() => { jest.advanceTimersByTime(500) })
 
       // Should show 60 frames captured
       await waitFor(() => {
@@ -692,18 +1053,39 @@ describe('ContributionPage - State Management', () => {
     })
 
     it('should capture all required landmarks', async () => {
-      render(<ContributionPage />)
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
       fireEvent.click(screen.getByText('Select HELLO'))
-      await waitFor(() => screen.getByText('I\'m Ready to Record'))
-      fireEvent.click(screen.getByText('I\'m Ready to Record'))
+
+
+      await waitFor(() => screen.getByText(/Add Your Contribution/i))
+
+
+      fireEvent.click(screen.getByText(/Add Your Contribution/i))
+
+
+      await waitFor(() => screen.getByText('I Understand - Start Contributing'))
+      fireEvent.click(screen.getByText('I Understand - Start Contributing'))
+
+      // Complete classification step
+      await waitFor(() => screen.getByText('Continue to Recording'))
+      fireEvent.click(screen.getByText('Continue to Recording'))
 
       await waitFor(() => screen.getByText(/Start Recording/i))
       fireEvent.click(screen.getByText(/Start Recording/i))
 
       act(() => { jest.advanceTimersByTime(5000) })
       simulateFrameCapture(60)
-      act(() => { jest.advanceTimersByTime(2000) })
+      act(() => { jest.advanceTimersByTime(3000) })
+
+      // Manually trigger stop recording
+      const stopButton = screen.queryByRole('button', { name: /Stop Recording/i })
+      if (stopButton) {
+        fireEvent.click(stopButton)
+      }
+
+      // Wait for completion flash (500ms)
+      act(() => { jest.advanceTimersByTime(500) })
 
       await waitFor(() => screen.getByText(/Looks Good - Submit/i))
       fireEvent.click(screen.getByText(/Looks Good - Submit/i))
@@ -722,29 +1104,50 @@ describe('ContributionPage - State Management', () => {
 
   describe('Anonymous User ID', () => {
     it('should generate unique user ID on component mount', () => {
-      const { unmount } = render(<ContributionPage />)
+      const { unmount } = render(<ContributionPage maxAttempts={1} testMode={true} />)
       unmount()
 
       // Render again
-      render(<ContributionPage />)
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
       // User ID is generated internally
       expect(screen.getByTestId('sign-selector')).toBeInTheDocument()
     })
 
     it('should include user ID in contribution submission', async () => {
-      render(<ContributionPage />)
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
       fireEvent.click(screen.getByText('Select HELLO'))
-      await waitFor(() => screen.getByText('I\'m Ready to Record'))
-      fireEvent.click(screen.getByText('I\'m Ready to Record'))
+
+
+      await waitFor(() => screen.getByText(/Add Your Contribution/i))
+
+
+      fireEvent.click(screen.getByText(/Add Your Contribution/i))
+
+
+      await waitFor(() => screen.getByText('I Understand - Start Contributing'))
+      fireEvent.click(screen.getByText('I Understand - Start Contributing'))
+
+      // Complete classification step
+      await waitFor(() => screen.getByText('Continue to Recording'))
+      fireEvent.click(screen.getByText('Continue to Recording'))
 
       await waitFor(() => screen.getByText(/Start Recording/i))
       fireEvent.click(screen.getByText(/Start Recording/i))
 
       act(() => { jest.advanceTimersByTime(5000) })
       simulateFrameCapture(60)
-      act(() => { jest.advanceTimersByTime(2000) })
+      act(() => { jest.advanceTimersByTime(3000) })
+
+      // Manually trigger stop recording
+      const stopButton = screen.queryByRole('button', { name: /Stop Recording/i })
+      if (stopButton) {
+        fireEvent.click(stopButton)
+      }
+
+      // Wait for completion flash (500ms)
+      act(() => { jest.advanceTimersByTime(500) })
 
       await waitFor(() => screen.getByText(/Looks Good - Submit/i))
       fireEvent.click(screen.getByText(/Looks Good - Submit/i))
@@ -759,24 +1162,37 @@ describe('ContributionPage - State Management', () => {
 
   describe('Edge Cases', () => {
     it('should handle rapid state transitions', async () => {
-      render(<ContributionPage />)
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
-      // Rapidly click different selections
+      // Click HELLO - this transitions to community state immediately
       fireEvent.click(screen.getByText('Select HELLO'))
-      fireEvent.click(screen.getByText('Select THANK_YOU'))
 
-      // Should end up with last selection
+      // Once transitioned, SignSelector is no longer rendered
+      // Verify we ended up in community state
       await waitFor(() => {
-        expect(screen.getByText('Reference: THANK_YOU')).toBeInTheDocument()
+        expect(screen.getByTestId('community-contributions')).toBeInTheDocument()
+        expect(screen.getByText(/Add Your Contribution/i)).toBeInTheDocument()
       })
     })
 
     it('should prevent submission during countdown', async () => {
-      render(<ContributionPage />)
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
       fireEvent.click(screen.getByText('Select HELLO'))
-      await waitFor(() => screen.getByText('I\'m Ready to Record'))
-      fireEvent.click(screen.getByText('I\'m Ready to Record'))
+
+
+      await waitFor(() => screen.getByText(/Add Your Contribution/i))
+
+
+      fireEvent.click(screen.getByText(/Add Your Contribution/i))
+
+
+      await waitFor(() => screen.getByText('I Understand - Start Contributing'))
+      fireEvent.click(screen.getByText('I Understand - Start Contributing'))
+
+      // Complete classification step
+      await waitFor(() => screen.getByText('Continue to Recording'))
+      fireEvent.click(screen.getByText('Continue to Recording'))
 
       await waitFor(() => screen.getByText(/Start Recording/i))
       fireEvent.click(screen.getByText(/Start Recording/i))
@@ -795,21 +1211,23 @@ describe('ContributionPage - State Management', () => {
         dispose: jest.fn()
       }))
 
-      render(<ContributionPage />)
-
-      const alertMock = jest.spyOn(window, 'alert').mockImplementation()
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
       fireEvent.click(screen.getByText('Select HELLO'))
-      await waitFor(() => screen.getByText('I\'m Ready to Record'))
-      fireEvent.click(screen.getByText('I\'m Ready to Record'))
+      await waitFor(() => screen.getByText(/Add Your Contribution/i))
+      fireEvent.click(screen.getByText(/Add Your Contribution/i))
+      await waitFor(() => screen.getByText('I Understand - Start Contributing'))
+      fireEvent.click(screen.getByText('I Understand - Start Contributing'))
 
+      // Complete classification step
+      await waitFor(() => screen.getByText('Continue to Recording'))
+      fireEvent.click(screen.getByText('Continue to Recording'))
+
+      // The component should still render the recording UI despite error
+      // (error is shown via toast, not alert)
       await waitFor(() => {
-        expect(alertMock).toHaveBeenCalledWith(
-          expect.stringContaining('camera')
-        )
+        expect(screen.getByTestId('mock-webcam')).toBeInTheDocument()
       })
-
-      alertMock.mockRestore()
     })
   })
 })

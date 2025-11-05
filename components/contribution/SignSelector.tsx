@@ -174,7 +174,10 @@ export default function SignSelector({ onSelectSign }: SignSelectorProps) {
         {/* Pagination */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 gap-3 sm:gap-4">
           <div className="text-sm sm:text-base text-gray-700 font-medium">
-            Showing {((currentPage - 1) * WORDS_PER_PAGE) + 1}-{Math.min(currentPage * WORDS_PER_PAGE, totalWords)} of {totalWords} signs
+            {(() => {
+              const displayCount = searchQuery ? filteredSigns.length : totalWords
+              return <>Showing {((currentPage - 1) * WORDS_PER_PAGE) + 1}-{Math.min(currentPage * WORDS_PER_PAGE, displayCount)} of {displayCount} signs</>
+            })()}
             {searchQuery && <span className="text-indigo-600"> (filtered)</span>}
           </div>
           <div className="flex gap-2 w-full sm:w-auto">
@@ -187,12 +190,15 @@ export default function SignSelector({ onSelectSign }: SignSelectorProps) {
               <span className="sm:hidden">←</span>
             </button>
             <div className="flex-1 sm:flex-none px-3 sm:px-4 py-2 text-sm sm:text-base bg-indigo-600 text-white rounded-lg font-semibold shadow text-center">
-              <span className="hidden sm:inline">Page {currentPage} of {Math.ceil(totalWords / WORDS_PER_PAGE)}</span>
-              <span className="sm:hidden">{currentPage}/{Math.ceil(totalWords / WORDS_PER_PAGE)}</span>
+              {(() => {
+                const displayCount = searchQuery ? filteredSigns.length : totalWords
+                return <><span className="hidden sm:inline">Page {currentPage} of {Math.ceil(displayCount / WORDS_PER_PAGE)}</span>
+              <span className="sm:hidden">{currentPage}/{Math.ceil(displayCount / WORDS_PER_PAGE)}</span></>
+              })()}
             </div>
             <button
               onClick={() => setCurrentPage(p => p + 1)}
-              disabled={currentPage >= Math.ceil(totalWords / WORDS_PER_PAGE)}
+              disabled={currentPage >= Math.ceil((searchQuery ? filteredSigns.length : totalWords) / WORDS_PER_PAGE)}
               className="flex-1 sm:flex-none px-3 sm:px-4 py-2 text-sm sm:text-base bg-white text-gray-800 font-medium rounded-lg shadow hover:shadow-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white transition-colors"
             >
               <span className="hidden sm:inline">Next →</span>

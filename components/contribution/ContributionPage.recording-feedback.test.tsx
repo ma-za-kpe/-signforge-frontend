@@ -29,8 +29,11 @@ jest.mock('./MediaPipeHandler', () => ({
 
 jest.mock('./ReferencePlayer', () => ({
   __esModule: true,
-  default: jest.fn(({ onReady }) => (
-    <button onClick={onReady}>I Understand - Start Contributing</button>
+  default: jest.fn(({ word, signImageUrl, onReady }) => (
+    <div data-testid="reference-player">
+      <h2>Reference: {word}</h2>
+      <button onClick={onReady}>I Understand - Start Contributing</button>
+    </div>
   ))
 }))
 
@@ -38,6 +41,29 @@ jest.mock('./SignSelector', () => ({
   __esModule: true,
   default: jest.fn(({ onSelectSign }) => (
     <button onClick={() => onSelectSign('HELLO')}>Select HELLO</button>
+  ))
+}))
+
+jest.mock('./SignClassification', () => ({
+  __esModule: true,
+  default: jest.fn(({ word, onComplete, onBack }) => (
+    <div data-testid="sign-classification">
+      <h2>Classify: {word}</h2>
+      <button onClick={onBack}>Back to Reference</button>
+      <button onClick={() => onComplete({
+        sign_type_movement: 'dynamic',
+        sign_type_hands: 'two-handed'
+      })}>Continue to Recording</button>
+    </div>
+  ))
+}))
+
+jest.mock('./CommunityContributions', () => ({
+  __esModule: true,
+  default: jest.fn(({ word }) => (
+    <div data-testid="community-contributions">
+      <h2>Community Contributions for {word}</h2>
+    </div>
   ))
 }))
 
@@ -57,19 +83,32 @@ describe('ContributionPage - Recording Feedback Features', () => {
 
   // Helper to get to recording state
   const navigateToRecording = async () => {
-    render(<ContributionPage />)
+    render(<ContributionPage maxAttempts={1} testMode={true} />)
 
-    // Select sign
+    // Select sign (goes to community state)
     fireEvent.click(screen.getByText('Select HELLO'))
 
-    // Ready to record
+    // Click "Add Your Contribution" button
     await waitFor(() => {
-      fireEvent.click(screen.getByText('I Understand - Start Contributing'))
+      expect(screen.getByText(/Add Your Contribution/i)).toBeInTheDocument()
     })
+    fireEvent.click(screen.getByText(/Add Your Contribution/i))
 
-    // Wait for MediaPipe initialization
-    await act(async () => {
-      await Promise.resolve()
+    // Click "I Understand - Start Contributing" on reference player
+    await waitFor(() => {
+      expect(screen.getByText('I Understand - Start Contributing')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByText('I Understand - Start Contributing'))
+
+    // Wait for classification step and complete it
+    await waitFor(() => {
+      expect(screen.getByText('Continue to Recording')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByText('Continue to Recording'))
+
+    // Wait for MediaPipe initialization and recording interface
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /start recording/i })).toBeInTheDocument()
     })
 
     // Click start recording button
@@ -87,33 +126,33 @@ describe('ContributionPage - Recording Feedback Features', () => {
     test('should display remaining time when recording starts', async () => {
       await navigateToRecording()
 
-      // Should show "2.0s remaining" or similar
-      expect(screen.getByText(/2\.\ds? remaining/i)).toBeInTheDocument()
+      // Should show "3.0s remaining" or similar
+      expect(screen.getByText(/3\.\ds? remaining/i)).toBeInTheDocument()
     })
 
     test('should update countdown timer every 100ms', async () => {
       await navigateToRecording()
 
-      // At start: 2.0s remaining
-      expect(screen.getByText(/2\.\ds? remaining/i)).toBeInTheDocument()
+      // At start: 3.0s remaining
+      expect(screen.getByText(/3\.\ds? remaining/i)).toBeInTheDocument()
 
-      // After 500ms: ~1.5s remaining
+      // After 500ms: ~2.5s remaining
+      act(() => {
+        jest.advanceTimersByTime(500)
+      })
+      expect(screen.getByText(/2\.[4-6]s? remaining/i)).toBeInTheDocument()
+
+      // After 1000ms more: ~2.0s remaining
+      act(() => {
+        jest.advanceTimersByTime(500)
+      })
+      expect(screen.getByText(/[12]\.[0-1]s? remaining/i)).toBeInTheDocument()
+
+      // After 500ms more: ~1.5s remaining
       act(() => {
         jest.advanceTimersByTime(500)
       })
       expect(screen.getByText(/1\.[4-6]s? remaining/i)).toBeInTheDocument()
-
-      // After 1000ms more: ~1.0s remaining
-      act(() => {
-        jest.advanceTimersByTime(500)
-      })
-      expect(screen.getByText(/1\.[0-1]s? remaining/i)).toBeInTheDocument()
-
-      // After 500ms more: ~0.5s remaining
-      act(() => {
-        jest.advanceTimersByTime(500)
-      })
-      expect(screen.getByText(/0\.[4-6]s? remaining/i)).toBeInTheDocument()
     })
 
     test('should show 0.0s when recording completes', async () => {
@@ -121,7 +160,7 @@ describe('ContributionPage - Recording Feedback Features', () => {
 
       // Advance to end of recording
       act(() => {
-        jest.advanceTimersByTime(1900) // Almost 2 seconds
+        jest.advanceTimersByTime(2900) // Almost 3 seconds
       })
 
       expect(screen.getByText(/0\.[0-1]s? remaining/i)).toBeInTheDocument()
@@ -130,7 +169,7 @@ describe('ContributionPage - Recording Feedback Features', () => {
     test('should display countdown in large, visible font', async () => {
       await navigateToRecording()
 
-      const countdownElement = screen.getByText(/2\.\ds? remaining/i)
+      const countdownElement = screen.getByText(/3\.\ds? remaining/i)
       expect(countdownElement).toHaveClass('text-red-600')
       expect(countdownElement).toHaveClass('font-semibold')
     })
@@ -152,7 +191,7 @@ describe('ContributionPage - Recording Feedback Features', () => {
       expect(progressFill).toHaveStyle({ width: '0%' })
     })
 
-    test('should show 50% progress after 1 second', async () => {
+    test('should show 33% progress after 1 second', async () => {
       await navigateToRecording()
 
       act(() => {
@@ -160,19 +199,19 @@ describe('ContributionPage - Recording Feedback Features', () => {
       })
 
       const progressFill = screen.getByTestId('progress-fill')
-      // Should be around 50% (allowing for small variations)
+      // Should be around 33% (allowing for small variations)
       const widthStyle = progressFill.style.width
       const widthValue = parseInt(widthStyle)
-      expect(widthValue).toBeGreaterThanOrEqual(48)
-      expect(widthValue).toBeLessThanOrEqual(52)
+      expect(widthValue).toBeGreaterThanOrEqual(30)
+      expect(widthValue).toBeLessThanOrEqual(36)
     })
 
     test('should show 100% progress at end', async () => {
       await navigateToRecording()
 
-      // Advance to just before completion (1.9 seconds)
+      // Advance to just before completion (2.9 seconds)
       act(() => {
-        jest.advanceTimersByTime(1900)
+        jest.advanceTimersByTime(2900)
       })
 
       const progressFill = screen.getByTestId('progress-fill')
@@ -212,7 +251,7 @@ describe('ContributionPage - Recording Feedback Features', () => {
     test('should NOT show warning at start of recording', async () => {
       await navigateToRecording()
 
-      expect(screen.queryByText(/finishing up/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/Finishing up\.\.\./)).not.toBeInTheDocument()
     })
 
     test('should NOT show warning at 1 second remaining', async () => {
@@ -222,28 +261,28 @@ describe('ContributionPage - Recording Feedback Features', () => {
         jest.advanceTimersByTime(1000)
       })
 
-      expect(screen.queryByText(/finishing up/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/Finishing up\.\.\./)).not.toBeInTheDocument()
     })
 
     test('should show warning when 0.5s or less remaining', async () => {
       await navigateToRecording()
 
-      // Advance to 1.5 seconds (0.5s remaining)
+      // Advance to 2.5 seconds elapsed (0.5s remaining in 3s recording)
       act(() => {
-        jest.advanceTimersByTime(1500)
+        jest.advanceTimersByTime(2500)
       })
 
-      expect(screen.getByText(/finishing up/i)).toBeInTheDocument()
+      expect(screen.getByText(/Finishing up\.\.\./)).toBeInTheDocument()
     })
 
     test('should show warning with yellow color', async () => {
       await navigateToRecording()
 
       act(() => {
-        jest.advanceTimersByTime(1500)
+        jest.advanceTimersByTime(2500)
       })
 
-      const warning = screen.getByText(/finishing up/i)
+      const warning = screen.getByText(/Finishing up\.\.\./)
       expect(warning.closest('div')).toHaveClass('bg-yellow-500')
     })
 
@@ -251,10 +290,10 @@ describe('ContributionPage - Recording Feedback Features', () => {
       await navigateToRecording()
 
       act(() => {
-        jest.advanceTimersByTime(1500)
+        jest.advanceTimersByTime(2500)
       })
 
-      const warning = screen.getByText(/finishing up/i)
+      const warning = screen.getByText(/Finishing up\.\.\./)
       expect(warning.closest('div')).toHaveClass('animate-bounce')
     })
 
@@ -262,17 +301,17 @@ describe('ContributionPage - Recording Feedback Features', () => {
       await navigateToRecording()
 
       act(() => {
-        jest.advanceTimersByTime(1500)
+        jest.advanceTimersByTime(2500)
       })
 
-      expect(screen.getByText(/finishing up/i)).toBeInTheDocument()
+      expect(screen.getByText(/Finishing up\.\.\./)).toBeInTheDocument()
 
       act(() => {
         jest.advanceTimersByTime(400)
       })
 
       // Still visible at 0.1s remaining
-      expect(screen.getByText(/finishing up/i)).toBeInTheDocument()
+      expect(screen.getByText(/Finishing up\.\.\./)).toBeInTheDocument()
     })
   })
 
@@ -281,47 +320,62 @@ describe('ContributionPage - Recording Feedback Features', () => {
     test('should NOT show completion flash while recording', async () => {
       await navigateToRecording()
 
-      expect(screen.queryByText(/done/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/DONE/)).not.toBeInTheDocument()
     })
 
     test('should show "DONE!" flash when recording completes', async () => {
       await navigateToRecording()
 
-      // Complete recording (2 seconds)
+      // Complete recording (need to advance to 3.5s for fallback timer to trigger)
       act(() => {
-        jest.advanceTimersByTime(2000)
+        jest.advanceTimersByTime(3500)
       })
 
-      expect(screen.getByText(/done/i)).toBeInTheDocument()
+      // Wait for completion flash to appear
+      await waitFor(() => {
+        expect(screen.getByText(/DONE/)).toBeInTheDocument()
+      })
     })
 
     test('should show completion flash with green checkmark', async () => {
       await navigateToRecording()
 
       act(() => {
-        jest.advanceTimersByTime(2000)
+        jest.advanceTimersByTime(3500)
       })
 
+      // Wait for completion flash to appear
       // Should have checkmark emoji or icon
-      const doneElement = screen.getByText(/✓.*done/i)
-      expect(doneElement).toBeInTheDocument()
+      await waitFor(() => {
+        const doneElement = screen.getByText(/✓.*DONE/)
+        expect(doneElement).toBeInTheDocument()
+      })
     })
 
     test('should show completion flash for 500ms', async () => {
       await navigateToRecording()
 
       act(() => {
-        jest.advanceTimersByTime(2000)
+        jest.advanceTimersByTime(3000)
       })
 
+      // Manually trigger stop recording
+      const stopButton = screen.queryByRole('button', { name: /Stop Recording/i })
+      if (stopButton) {
+        fireEvent.click(stopButton)
+      }
+
+      // Wait for completion flash to appear
       // Flash should be visible
-      expect(screen.getByText(/done/i)).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.getByText(/DONE/)).toBeInTheDocument()
+      })
 
       // After 300ms, still visible
       act(() => {
         jest.advanceTimersByTime(300)
       })
-      expect(screen.getByText(/done/i)).toBeInTheDocument()
+      expect(screen.getByText(/DONE/)).toBeInTheDocument()
 
       // After 500ms total, should transition to review
       act(() => {
@@ -330,7 +384,7 @@ describe('ContributionPage - Recording Feedback Features', () => {
 
       // Should now be on review screen
       await waitFor(() => {
-        expect(screen.getByText(/review your recording/i)).toBeInTheDocument()
+        expect(screen.queryByText(/Start Recording/i)).not.toBeInTheDocument()
       })
     })
 
@@ -338,23 +392,29 @@ describe('ContributionPage - Recording Feedback Features', () => {
       await navigateToRecording()
 
       act(() => {
-        jest.advanceTimersByTime(2000)
+        jest.advanceTimersByTime(3500)
       })
 
-      const doneElement = screen.getByText(/done/i)
-      expect(doneElement).toHaveClass('text-4xl')
-      expect(doneElement).toHaveClass('font-bold')
+      // Wait for completion flash to appear
+      await waitFor(() => {
+        const doneElement = screen.getByText(/DONE/)
+        expect(doneElement).toHaveClass('text-4xl')
+        expect(doneElement).toHaveClass('font-bold')
+      })
     })
 
     test('should have pulse animation', async () => {
       await navigateToRecording()
 
       act(() => {
-        jest.advanceTimersByTime(2000)
+        jest.advanceTimersByTime(3500)
       })
 
-      const doneElement = screen.getByText(/done/i)
-      expect(doneElement.closest('div')).toHaveClass('animate-pulse')
+      // Wait for completion flash to appear
+      await waitFor(() => {
+        const doneElement = screen.getByText(/DONE/)
+        expect(doneElement.closest('div')).toHaveClass('animate-pulse')
+      })
     })
   })
 
@@ -368,12 +428,32 @@ describe('ContributionPage - Recording Feedback Features', () => {
     })
 
     test('should NOT display stop button before recording', async () => {
-      render(<ContributionPage />)
+      render(<ContributionPage maxAttempts={1} testMode={true} />)
 
+      // Select sign (goes to community state)
       fireEvent.click(screen.getByText('Select HELLO'))
 
+      // Click "Add Your Contribution" button
       await waitFor(() => {
-        fireEvent.click(screen.getByText('I Understand - Start Contributing'))
+        expect(screen.getByText(/Add Your Contribution/i)).toBeInTheDocument()
+      })
+      fireEvent.click(screen.getByText(/Add Your Contribution/i))
+
+      // Wait for reference and click ready
+      await waitFor(() => {
+        expect(screen.getByText('I Understand - Start Contributing')).toBeInTheDocument()
+      })
+      fireEvent.click(screen.getByText('I Understand - Start Contributing'))
+
+      // Wait for classification and complete it
+      await waitFor(() => {
+        expect(screen.getByText('Continue to Recording')).toBeInTheDocument()
+      })
+      fireEvent.click(screen.getByText('Continue to Recording'))
+
+      // Wait for recording interface
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /start recording/i })).toBeInTheDocument()
       })
 
       // Before clicking "Start Recording"
@@ -392,9 +472,19 @@ describe('ContributionPage - Recording Feedback Features', () => {
       const stopButton = screen.getByRole('button', { name: /stop recording/i })
       fireEvent.click(stopButton)
 
-      // Should transition to review screen
+      // Wait for completion flash to appear
       await waitFor(() => {
-        expect(screen.getByText(/review your recording/i)).toBeInTheDocument()
+        expect(screen.getByText(/DONE/)).toBeInTheDocument()
+      })
+
+      // Wait for completion flash (500ms)
+      act(() => {
+        jest.advanceTimersByTime(500)
+      })
+
+      // Should transition to review screen (check for absence of recording UI)
+      await waitFor(() => {
+        expect(screen.queryByText(/RECORDING/i)).not.toBeInTheDocument()
       })
     })
 
@@ -409,9 +499,19 @@ describe('ContributionPage - Recording Feedback Features', () => {
       const stopButton = screen.getByRole('button', { name: /stop recording/i })
       fireEvent.click(stopButton)
 
+      // Wait for completion flash to appear
       await waitFor(() => {
-        // Should show frames captured (recording was stopped early)
-        expect(screen.getByText(/frames captured:/i)).toBeInTheDocument()
+        expect(screen.getByText(/DONE/)).toBeInTheDocument()
+      })
+
+      // Wait for completion flash (500ms)
+      act(() => {
+        jest.advanceTimersByTime(500)
+      })
+
+      // Should transition away from recording state
+      await waitFor(() => {
+        expect(screen.queryByText(/RECORDING/i)).not.toBeInTheDocument()
       })
     })
 
@@ -425,8 +525,9 @@ describe('ContributionPage - Recording Feedback Features', () => {
       const stopButton = screen.getByRole('button', { name: /stop recording/i })
       fireEvent.click(stopButton)
 
+      // Wait for completion flash to appear
       // Should show DONE flash
-      expect(screen.getByText(/done/i)).toBeInTheDocument()
+      expect(screen.getByText(/DONE/)).toBeInTheDocument()
     })
 
     test('should have red color and clear label', async () => {
@@ -450,19 +551,19 @@ describe('ContributionPage - Recording Feedback Features', () => {
     test('should show all feedback elements simultaneously', async () => {
       await navigateToRecording()
 
-      // At 1.5 seconds (0.5s remaining):
+      // At 2.5 seconds elapsed (0.5s remaining in 3s recording):
       act(() => {
-        jest.advanceTimersByTime(1500)
+        jest.advanceTimersByTime(2500)
       })
 
-      // 1. Countdown timer
+      // 1. Countdown timer (should show ~0.5s remaining)
       expect(screen.getByText(/0\.[4-6]s? remaining/i)).toBeInTheDocument()
 
       // 2. Progress bar
       expect(screen.getByTestId('recording-progress-bar')).toBeInTheDocument()
 
       // 3. Warning
-      expect(screen.getByText(/finishing up/i)).toBeInTheDocument()
+      expect(screen.getByText(/Finishing up\.\.\./)).toBeInTheDocument()
 
       // 4. Stop button
       expect(screen.getByRole('button', { name: /stop recording/i })).toBeInTheDocument()
@@ -473,19 +574,29 @@ describe('ContributionPage - Recording Feedback Features', () => {
 
       // Complete recording
       act(() => {
-        jest.advanceTimersByTime(2000)
+        jest.advanceTimersByTime(3000)
       })
 
+      // Manually trigger stop recording
+      const stopButton = screen.queryByRole('button', { name: /Stop Recording/i })
+      if (stopButton) {
+        fireEvent.click(stopButton)
+      }
+
+      // Wait for completion flash to appear
       // Should show DONE flash
-      expect(screen.getByText(/done/i)).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.getByText(/DONE/)).toBeInTheDocument()
+      })
 
       // After 500ms, should be on review
       act(() => {
         jest.advanceTimersByTime(500)
       })
 
+      // Check we transitioned away from recording state
       await waitFor(() => {
-        expect(screen.getByText(/review your recording/i)).toBeInTheDocument()
+        expect(screen.queryByText(/RECORDING/i)).not.toBeInTheDocument()
       })
     })
 

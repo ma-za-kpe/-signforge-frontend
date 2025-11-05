@@ -8,13 +8,16 @@ import SignSelector from './SignSelector'
 // Mock fetch
 global.fetch = jest.fn()
 
+// Mock words pre-sorted as backend would return them:
+// - Incomplete words (ready=false) before complete words (ready=true)
+// - Within each group, sorted by contributions descending
 const mockWords = [
   { word: 'HELLO', contributions: 8, needed: 10, ready: false },
+  { word: 'BABY', contributions: 7, needed: 10, ready: false },
   { word: 'THANK_YOU', contributions: 5, needed: 10, ready: false },
   { word: 'GOODBYE', contributions: 3, needed: 10, ready: false },
-  { word: 'SCHOOL', contributions: 10, needed: 10, ready: true },
-  { word: 'BABY', contributions: 7, needed: 10, ready: false },
   { word: 'LEARN', contributions: 2, needed: 10, ready: false },
+  { word: 'SCHOOL', contributions: 10, needed: 10, ready: true },
 ]
 
 describe('SignSelector - Search and Sorting', () => {
