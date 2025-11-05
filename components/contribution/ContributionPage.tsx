@@ -12,8 +12,11 @@ import RecordingFeedback from './RecordingFeedback'
 import SkeletonPreview from './SkeletonPreview'
 import CommunityContributions from './CommunityContributions'
 import QualityFeedback from './QualityFeedback'
+import LightingQualityMeter from './LightingQualityMeter'
+import HandVisibilityIndicator from './HandVisibilityIndicator'
+import QualityScoreBreakdown from './QualityScoreBreakdown'
 
-type PageState = 'select' | 'community' | 'reference' | 'classification' | 'recording' | 'review' | 'success'
+type PageState = 'select' | 'community' | 'reference' | 'classification' | 'environment-check' | 'recording' | 'review' | 'success'
 
 interface Frame {
   frame_number: number
@@ -64,6 +67,35 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
   }>>([])
   const [showAttemptReview, setShowAttemptReview] = useState(false)
 
+  // Environment check state
+  const [environmentCheck, setEnvironmentCheck] = useState<{
+    lighting_quality: number
+    hand_visibility: number
+    frame_completeness: number
+    can_proceed: boolean
+    lighting_label: string
+    recommendations: string[]
+  } | null>(null)
+  const [isCheckingEnvironment, setIsCheckingEnvironment] = useState(false)
+  const [environmentCheckFrames, setEnvironmentCheckFrames] = useState<Frame[]>([])
+
+  // Quality breakdown state
+  const [qualityBreakdown, setQualityBreakdown] = useState<{
+    overall_score: number
+    hand_visibility: number
+    motion_smoothness: number
+    frame_completeness: number
+    lighting_quality: number
+    components: {
+      overall: string
+      hand_visibility: string
+      motion_smoothness: string
+      frame_completeness: string
+      lighting: string
+    }
+    recommendations: string[]
+  } | null>(null)
+
   // Auto-select word from URL parameter
   useEffect(() => {
     const wordParam = searchParams.get('word')
@@ -81,9 +113,9 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
   const frameCountRef = useRef<number>(0)
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Initialize MediaPipe when entering recording state
+  // Initialize MediaPipe when entering recording or environment-check state
   useEffect(() => {
-    if (pageState === 'recording' && webcamRef.current?.video) {
+    if ((pageState === 'recording' || pageState === 'environment-check') && webcamRef.current?.video) {
       initializeMediaPipe()
     }
 
@@ -170,7 +202,7 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
   }
 
   const handleLandmarkResults = (results: LandmarkResult) => {
-    console.log('📸 handleLandmarkResults called, isRecording:', isRecordingRef.current)
+    console.log('📸 handleLandmarkResults called, pageState:', pageState, 'isRecording:', isRecordingRef.current)
 
     // Draw skeleton overlay
     if (canvasRef.current && webcamRef.current?.video) {
@@ -185,6 +217,31 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
       }
 
       drawSkeletonOverlay(canvas, results, rect.width, rect.height)
+    }
+
+    // Collect frames for environment check
+    if (pageState === 'environment-check' && environmentCheckFrames.length < 20) {
+      const frame: Frame = {
+        frame_number: environmentCheckFrames.length,
+        timestamp: Date.now() / 1000,
+        pose_landmarks: results.poseLandmarks || [],
+        left_hand_landmarks: results.leftHandLandmarks,
+        right_hand_landmarks: results.rightHandLandmarks,
+        face_landmarks: null
+      }
+
+      setEnvironmentCheckFrames(prev => {
+        const newFrames = [...prev, frame]
+        console.log(`🔍 Environment check: collected ${newFrames.length}/20 frames`)
+
+        // Auto-trigger check when we have 20 frames
+        if (newFrames.length === 20) {
+          console.log('✓ Collected 20 frames, triggering environment check...')
+          setTimeout(() => performEnvironmentCheck(), 100)
+        }
+
+        return newFrames
+      })
     }
 
     // Record frames during recording
@@ -213,7 +270,7 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
         return [...prev, frame]
       })
 
-      // Stop after 2 seconds (60 frames @ 30fps)
+      // Stop after 3 seconds
       if (elapsed >= 3.0) {
         stopRecording()
       }
@@ -238,12 +295,71 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
     sign_type_hands: 'one-handed' | 'two-handed'
   }) => {
     setSignClassification(classification)
-    setPageState('recording')
+    // In test mode, skip environment check and go straight to recording
+    setPageState(testMode ? 'recording' : 'environment-check')
   }
 
   const handleBackToReference = () => {
     setPageState('reference')
   }
+
+  // Environment check handler
+  const performEnvironmentCheck = async () => {
+    if (environmentCheckFrames.length < 10) {
+      console.log('⏳ Collecting frames for environment check...', environmentCheckFrames.length)
+      return
+    }
+
+    setIsCheckingEnvironment(true)
+
+    try {
+      const apiUrl = (process.env.NEXT_PUBLIC_API_URL || '').trim()
+      const response = await fetch(`${apiUrl}/api/check-environment`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          frames: environmentCheckFrames.slice(0, 20) // Send first 20 frames
+        })
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        setEnvironmentCheck(data)
+        console.log('✓ Environment check complete:', data)
+      } else {
+        console.error('Environment check failed:', data)
+        toast.error('Failed to check environment')
+      }
+    } catch (error) {
+      console.error('Environment check error:', error)
+      toast.error('Failed to check environment')
+    } finally {
+      setIsCheckingEnvironment(false)
+    }
+  }
+
+  // Calculate current hand visibility from last 10 frames for real-time indicator
+  const calculateCurrentHandVisibility = useCallback(() => {
+    const lastFrames = recordedFrames.slice(-10) // Last 10 frames
+    if (lastFrames.length === 0) return 0
+
+    let totalVisibility = 0
+    lastFrames.forEach(frame => {
+      let leftVis = 0, rightVis = 0
+      if (frame.left_hand_landmarks && frame.left_hand_landmarks.length > 0) {
+        leftVis = frame.left_hand_landmarks.reduce((sum: number, lm: any) => sum + (lm.visibility || 0), 0) / frame.left_hand_landmarks.length
+      }
+      if (frame.right_hand_landmarks && frame.right_hand_landmarks.length > 0) {
+        rightVis = frame.right_hand_landmarks.reduce((sum: number, lm: any) => sum + (lm.visibility || 0), 0) / frame.right_hand_landmarks.length
+      }
+      totalVisibility += Math.max(leftVis, rightVis)
+    })
+
+    return totalVisibility / lastFrames.length
+  }, [recordedFrames])
 
   const startCountdown = () => {
     setCountdown(5)
@@ -591,10 +707,23 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
       if (!response.ok) {
         const error = await response.json()
         console.error('❌ API error response:', error)
+
+        // Capture quality breakdown from error response (if present)
+        if (error.quality_breakdown) {
+          setQualityBreakdown(error.quality_breakdown)
+          console.log('✓ Quality breakdown from error:', error.quality_breakdown)
+        }
+
         throw new Error(JSON.stringify(error.detail || error))
       }
 
       const result = await response.json()
+
+      // Capture quality breakdown from response
+      if (result.quality_breakdown) {
+        setQualityBreakdown(result.quality_breakdown)
+        console.log('✓ Quality breakdown received:', result.quality_breakdown)
+      }
 
       setContributionStats({
         total: result.total_contributions,
@@ -747,6 +876,109 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
     )
   }
 
+  if (pageState === 'environment-check') {
+    return (
+      <>
+      <Toaster position="top-center" reverseOrder={false} />
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6">
+        <div className="max-w-4xl mx-auto">
+          <h1 className="text-3xl font-bold text-gray-800 mb-2 text-center">
+            Environment Check
+          </h1>
+          <p className="text-gray-600 mb-6 text-center">
+            Checking your camera setup and lighting...
+          </p>
+
+          {/* Webcam Preview */}
+          <div className="relative mb-6 bg-black rounded-lg overflow-hidden">
+            <Webcam
+              ref={webcamRef}
+              audio={false}
+              screenshotFormat="image/jpeg"
+              videoConstraints={{
+                facingMode: 'user',
+                width: 1280,
+                height: 720
+              }}
+              className="w-full"
+            />
+            <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none" />
+          </div>
+
+          {/* Checking Status */}
+          {isCheckingEnvironment && (
+            <div className="text-center mb-4">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-2"></div>
+              <p className="text-gray-700">Analyzing environment...</p>
+            </div>
+          )}
+
+          {/* Environment Check Results */}
+          {environmentCheck && !isCheckingEnvironment && (
+            <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+              <h2 className="text-xl font-semibold mb-4">Environment Quality</h2>
+
+              <LightingQualityMeter
+                lightingQuality={environmentCheck.lighting_quality}
+                label="Lighting Quality"
+                showPercentage={true}
+              />
+
+              {/* Recommendations */}
+              <div className="mt-6">
+                <h3 className="font-semibold mb-2">
+                  {environmentCheck.can_proceed ? '✓ Ready to Record' : '⚠️ Action Required'}
+                </h3>
+                <ul className="space-y-2">
+                  {environmentCheck.recommendations.map((rec, index) => (
+                    <li key={index} className="flex items-start gap-2 text-sm">
+                      <span className="text-blue-500 mt-0.5">•</span>
+                      <span>{rec}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="mt-6 flex gap-3">
+                <button
+                  onClick={() => setPageState('classification')}
+                  className="px-6 py-3 border border-gray-300 rounded-lg hover:bg-gray-50"
+                >
+                  ← Back
+                </button>
+                <button
+                  onClick={() => setPageState('recording')}
+                  disabled={!environmentCheck.can_proceed}
+                  className={`flex-1 px-6 py-3 rounded-lg font-semibold ${
+                    environmentCheck.can_proceed
+                      ? 'bg-indigo-600 text-white hover:bg-indigo-700'
+                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  }`}
+                >
+                  {environmentCheck.can_proceed ? 'Start Recording →' : 'Improve Lighting First'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Instructions while collecting frames */}
+          {!environmentCheck && !isCheckingEnvironment && (
+            <div className="bg-white rounded-lg shadow-md p-6 text-center">
+              <p className="text-gray-700">
+                Position yourself in frame and wait while we check your environment...
+              </p>
+              <p className="text-sm text-gray-500 mt-2">
+                Collected {environmentCheckFrames.length}/20 frames
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+      </>
+    )
+  }
+
   if (pageState === 'recording' || pageState === 'review') {
     return (
       <>
@@ -786,6 +1018,16 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
               />
             )}
           </div>
+
+          {/* Real-Time Quality Indicators - Desktop Only */}
+          {pageState === 'recording' && isRecording && (
+            <div className="hidden md:block absolute top-24 right-6 z-30 space-y-3 max-w-xs">
+              <HandVisibilityIndicator
+                handVisibility={calculateCurrentHandVisibility()}
+                showPercentage={true}
+              />
+            </div>
+          )}
 
           {/* Completion Flash */}
           {showCompletionFlash && (
@@ -919,6 +1161,25 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
                   Were your hands clearly visible throughout?
                 </p>
 
+                {/* Quality Breakdown - Show if quality is low or if submission failed */}
+                {qualityBreakdown && qualityBreakdown.overall_score < 0.5 && (
+                  <div className="mb-5">
+                    <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-4">
+                      <h3 className="text-lg font-semibold text-orange-800 mb-2">
+                        ⚠️ Quality Too Low (Minimum 50% Required)
+                      </h3>
+                      <p className="text-sm text-orange-700">
+                        Your recording quality is below the minimum threshold. Please review the issues below and try again.
+                      </p>
+                    </div>
+                    <QualityScoreBreakdown
+                      breakdown={qualityBreakdown}
+                      signType={signClassification ? `${signClassification.sign_type_movement}, ${signClassification.sign_type_hands}` : undefined}
+                      showRecommendations={true}
+                    />
+                  </div>
+                )}
+
                 {/* Action Buttons */}
                 <div className="flex flex-col gap-3">
                   <button
@@ -968,6 +1229,17 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
           <p className="text-base sm:text-lg md:text-xl text-gray-600 mb-6 sm:mb-8">
             Your contribution has been submitted successfully
           </p>
+
+          {/* Quality Score Breakdown */}
+          {qualityBreakdown && (
+            <div className="mb-6 sm:mb-8 text-left">
+              <QualityScoreBreakdown
+                breakdown={qualityBreakdown}
+                signType={signClassification ? `${signClassification.sign_type_movement}, ${signClassification.sign_type_hands}` : undefined}
+                showRecommendations={qualityBreakdown.overall_score < 0.7}
+              />
+            </div>
+          )}
 
           <div className="bg-indigo-50 rounded-lg sm:rounded-xl p-4 sm:p-6 mb-6 sm:mb-8">
             <div className="text-2xl sm:text-3xl font-bold text-indigo-600 mb-2">

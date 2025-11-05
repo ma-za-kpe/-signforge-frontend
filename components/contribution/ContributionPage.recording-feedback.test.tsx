@@ -106,6 +106,7 @@ describe('ContributionPage - Recording Feedback Features', () => {
     })
     fireEvent.click(screen.getByText('Continue to Recording'))
 
+    // In test mode, environment check is skipped and goes straight to recording
     // Wait for MediaPipe initialization and recording interface
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /start recording/i })).toBeInTheDocument()
