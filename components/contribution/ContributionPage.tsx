@@ -76,8 +76,7 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
     lighting_label: string
     recommendations: string[]
   } | null>(null)
-  const [isCheckingEnvironment, setIsCheckingEnvironment] = useState(false)
-  const [environmentCheckFrames, setEnvironmentCheckFrames] = useState<Frame[]>([])
+  // Environment check is now real-time, no need for frame collection or API calls
 
   // Quality breakdown state
   const [qualityBreakdown, setQualityBreakdown] = useState<{
@@ -219,28 +218,52 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
       drawSkeletonOverlay(canvas, results, rect.width, rect.height)
     }
 
-    // Collect frames for environment check
-    if (pageState === 'environment-check' && environmentCheckFrames.length < 20) {
-      const frame: Frame = {
-        frame_number: environmentCheckFrames.length,
-        timestamp: Date.now() / 1000,
-        pose_landmarks: results.poseLandmarks || [],
-        left_hand_landmarks: results.leftHandLandmarks,
-        right_hand_landmarks: results.rightHandLandmarks,
-        face_landmarks: null
+    // Real-time client-side environment check (fast, no API call)
+    if (pageState === 'environment-check') {
+      // Calculate lighting and hand visibility in real-time
+      let lightingScore = 0
+      let handVisibilityScore = 0
+      let handCount = 0
+
+      // Lighting: average visibility of all landmarks
+      const allLandmarks = [
+        ...(results.poseLandmarks || []),
+        ...(results.leftHandLandmarks || []),
+        ...(results.rightHandLandmarks || [])
+      ]
+
+      if (allLandmarks.length > 0) {
+        lightingScore = allLandmarks.reduce((sum, lm) => sum + (lm.visibility || 0), 0) / allLandmarks.length
       }
 
-      setEnvironmentCheckFrames(prev => {
-        const newFrames = [...prev, frame]
-        console.log(`🔍 Environment check: collected ${newFrames.length}/20 frames`)
+      // Hand visibility: check if hands are detected
+      if (results.leftHandLandmarks && results.leftHandLandmarks.length > 0) {
+        const leftVis = results.leftHandLandmarks.reduce((sum, lm) => sum + (lm.visibility || 0), 0) / results.leftHandLandmarks.length
+        handVisibilityScore += leftVis
+        handCount++
+      }
+      if (results.rightHandLandmarks && results.rightHandLandmarks.length > 0) {
+        const rightVis = results.rightHandLandmarks.reduce((sum, lm) => sum + (lm.visibility || 0), 0) / results.rightHandLandmarks.length
+        handVisibilityScore += rightVis
+        handCount++
+      }
 
-        // Auto-trigger check when we have 20 frames
-        if (newFrames.length === 20) {
-          console.log('✓ Collected 20 frames, triggering environment check...')
-          setTimeout(() => performEnvironmentCheck(), 100)
-        }
+      if (handCount > 0) {
+        handVisibilityScore = handVisibilityScore / handCount
+      }
 
-        return newFrames
+      // Update environment check state immediately (real-time)
+      setEnvironmentCheck({
+        lighting_quality: lightingScore,
+        hand_visibility: handVisibilityScore,
+        frame_completeness: allLandmarks.length > 0 ? 0.9 : 0,
+        can_proceed: lightingScore >= 0.25 && handVisibilityScore >= 0.3,
+        lighting_label: lightingScore >= 0.85 ? 'Excellent ☀️' : lightingScore >= 0.70 ? 'Good 💡' : lightingScore >= 0.55 ? 'Acceptable ⚠️' : lightingScore >= 0.25 ? 'Poor 🌙' : 'Too Dark 🌑',
+        recommendations: lightingScore < 0.25
+          ? ['⚠️ Lighting too dark - move to a brighter area', 'Turn on more lights or face a window']
+          : handVisibilityScore < 0.3
+          ? ['⚠️ Hands not clearly visible', 'Position hands in front of camera']
+          : ['✓ Environment looks good! Ready to record']
       })
     }
 
@@ -304,42 +327,7 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
   }
 
   // Environment check handler
-  const performEnvironmentCheck = async () => {
-    if (environmentCheckFrames.length < 10) {
-      console.log('⏳ Collecting frames for environment check...', environmentCheckFrames.length)
-      return
-    }
-
-    setIsCheckingEnvironment(true)
-
-    try {
-      const apiUrl = (process.env.NEXT_PUBLIC_API_URL || '').trim()
-      const response = await fetch(`${apiUrl}/api/check-environment`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          frames: environmentCheckFrames.slice(0, 20) // Send first 20 frames
-        })
-      })
-
-      const data = await response.json()
-
-      if (response.ok) {
-        setEnvironmentCheck(data)
-        console.log('✓ Environment check complete:', data)
-      } else {
-        console.error('Environment check failed:', data)
-        toast.error('Failed to check environment')
-      }
-    } catch (error) {
-      console.error('Environment check error:', error)
-      toast.error('Failed to check environment')
-    } finally {
-      setIsCheckingEnvironment(false)
-    }
-  }
+  // Environment check is now done in real-time in handleLandmarkResults (no API call needed)
 
   // Calculate current hand visibility from last 10 frames for real-time indicator
   const calculateCurrentHandVisibility = useCallback(() => {
@@ -889,7 +877,7 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
             Checking your camera setup and lighting...
           </p>
 
-          {/* Webcam Preview */}
+          {/* Webcam Preview with Real-Time Overlay */}
           <div className="relative mb-6 bg-black rounded-lg overflow-hidden">
             <Webcam
               ref={webcamRef}
@@ -903,74 +891,95 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
               className="w-full"
             />
             <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none" />
+
+            {/* Real-time gauges overlaid on video */}
+            {environmentCheck && (
+              <div className="absolute top-4 left-4 right-4 space-y-3 z-10">
+                <div className="bg-black/60 backdrop-blur-sm rounded-lg p-4">
+                  {/* Lighting Gauge */}
+                  <div className="mb-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-white text-sm font-medium">💡 Lighting</span>
+                      <span className="text-white text-sm font-bold">{Math.round(environmentCheck.lighting_quality * 100)}%</span>
+                    </div>
+                    <div className="w-full h-3 bg-gray-700 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full transition-all duration-300 ${
+                          environmentCheck.lighting_quality >= 0.85 ? 'bg-green-500' :
+                          environmentCheck.lighting_quality >= 0.70 ? 'bg-blue-500' :
+                          environmentCheck.lighting_quality >= 0.55 ? 'bg-yellow-500' :
+                          environmentCheck.lighting_quality >= 0.25 ? 'bg-orange-500' : 'bg-red-500'
+                        }`}
+                        style={{ width: `${Math.round(environmentCheck.lighting_quality * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Hand Visibility Gauge */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-white text-sm font-medium">✋ Hands Visible</span>
+                      <span className="text-white text-sm font-bold">{Math.round(environmentCheck.hand_visibility * 100)}%</span>
+                    </div>
+                    <div className="w-full h-3 bg-gray-700 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full transition-all duration-300 ${
+                          environmentCheck.hand_visibility >= 0.70 ? 'bg-green-500' :
+                          environmentCheck.hand_visibility >= 0.30 ? 'bg-yellow-500' : 'bg-red-500'
+                        }`}
+                        style={{ width: `${Math.round(environmentCheck.hand_visibility * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Status Message */}
+                  <div className="mt-3 text-center">
+                    <span className={`text-sm font-semibold ${environmentCheck.can_proceed ? 'text-green-400' : 'text-red-400'}`}>
+                      {environmentCheck.can_proceed ? '✓ Ready to Record!' : '⚠️ Improve conditions'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Checking Status */}
-          {isCheckingEnvironment && (
-            <div className="text-center mb-4">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-2"></div>
-              <p className="text-gray-700">Analyzing environment...</p>
-            </div>
-          )}
-
-          {/* Environment Check Results */}
-          {environmentCheck && !isCheckingEnvironment && (
-            <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-              <h2 className="text-xl font-semibold mb-4">Environment Quality</h2>
-
-              <LightingQualityMeter
-                lightingQuality={environmentCheck.lighting_quality}
-                label="Lighting Quality"
-                showPercentage={true}
-              />
-
-              {/* Recommendations */}
-              <div className="mt-6">
-                <h3 className="font-semibold mb-2">
-                  {environmentCheck.can_proceed ? '✓ Ready to Record' : '⚠️ Action Required'}
-                </h3>
-                <ul className="space-y-2">
-                  {environmentCheck.recommendations.map((rec, index) => (
-                    <li key={index} className="flex items-start gap-2 text-sm">
-                      <span className="text-blue-500 mt-0.5">•</span>
-                      <span>{rec}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
+          {/* Large Prominent Action Button */}
+          {environmentCheck && (
+            <div className="space-y-4">
+              {/* Recommendations if needed */}
+              {!environmentCheck.can_proceed && (
+                <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+                  <ul className="space-y-2">
+                    {environmentCheck.recommendations.map((rec, index) => (
+                      <li key={index} className="flex items-start gap-2 text-sm text-orange-800">
+                        <span className="mt-0.5">•</span>
+                        <span>{rec}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               {/* Action Buttons */}
-              <div className="mt-6 flex gap-3">
+              <div className="flex gap-3">
                 <button
                   onClick={() => setPageState('classification')}
-                  className="px-6 py-3 border border-gray-300 rounded-lg hover:bg-gray-50"
+                  className="px-6 py-4 border-2 border-gray-300 rounded-xl hover:bg-gray-50 font-semibold text-gray-700"
                 >
                   ← Back
                 </button>
                 <button
                   onClick={() => setPageState('recording')}
                   disabled={!environmentCheck.can_proceed}
-                  className={`flex-1 px-6 py-3 rounded-lg font-semibold ${
+                  className={`flex-1 px-8 py-4 rounded-xl font-bold text-lg shadow-lg transition-all ${
                     environmentCheck.can_proceed
-                      ? 'bg-indigo-600 text-white hover:bg-indigo-700'
+                      ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:from-indigo-700 hover:to-purple-700 transform hover:scale-105'
                       : 'bg-gray-300 text-gray-500 cursor-not-allowed'
                   }`}
                 >
-                  {environmentCheck.can_proceed ? 'Start Recording →' : 'Improve Lighting First'}
+                  {environmentCheck.can_proceed ? '🎥 Start Recording' : '⏸️ Waiting for Good Conditions'}
                 </button>
               </div>
-            </div>
-          )}
-
-          {/* Instructions while collecting frames */}
-          {!environmentCheck && !isCheckingEnvironment && (
-            <div className="bg-white rounded-lg shadow-md p-6 text-center">
-              <p className="text-gray-700">
-                Position yourself in frame and wait while we check your environment...
-              </p>
-              <p className="text-sm text-gray-500 mt-2">
-                Collected {environmentCheckFrames.length}/20 frames
-              </p>
             </div>
           )}
         </div>
