@@ -112,19 +112,6 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
   const frameCountRef = useRef<number>(0)
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Initialize MediaPipe when entering recording or environment-check state
-  useEffect(() => {
-    if ((pageState === 'recording' || pageState === 'environment-check') && webcamRef.current?.video) {
-      initializeMediaPipe()
-    }
-
-    return () => {
-      if (mediaPipeHandlerRef.current) {
-        mediaPipeHandlerRef.current.dispose()
-      }
-    }
-  }, [pageState])
-
   // Track recording progress and auto-stop fallback
   useEffect(() => {
     if (isRecording) {
@@ -200,7 +187,7 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
     }
   }
 
-  const handleLandmarkResults = (results: LandmarkResult) => {
+  const handleLandmarkResults = useCallback((results: LandmarkResult) => {
     console.log('📸 handleLandmarkResults called, pageState:', pageState, 'isRecording:', isRecordingRef.current)
 
     // Draw skeleton overlay
@@ -298,7 +285,7 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
         stopRecording()
       }
     }
-  }
+  }, [pageState, stopRecording]) // Add dependencies to fix stale closure bug
 
   const handleSignSelected = (word: string) => {
     setSelectedWord(word)
@@ -348,6 +335,25 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
 
     return totalVisibility / lastFrames.length
   }, [recordedFrames])
+
+  // Initialize MediaPipe when entering recording or environment-check state
+  // IMPORTANT: Re-initialize when handleLandmarkResults changes to fix stale closure bug
+  useEffect(() => {
+    if ((pageState === 'recording' || pageState === 'environment-check') && webcamRef.current?.video) {
+      // Dispose existing handler before creating new one
+      if (mediaPipeHandlerRef.current) {
+        console.log('🔄 Re-initializing MediaPipe with fresh callback')
+        mediaPipeHandlerRef.current.dispose()
+      }
+      initializeMediaPipe()
+    }
+
+    return () => {
+      if (mediaPipeHandlerRef.current) {
+        mediaPipeHandlerRef.current.dispose()
+      }
+    }
+  }, [pageState, handleLandmarkResults])
 
   const startCountdown = () => {
     setCountdown(5)
