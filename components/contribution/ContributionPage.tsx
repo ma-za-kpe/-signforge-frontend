@@ -18,7 +18,7 @@ import QualityScoreBreakdown from './QualityScoreBreakdown'
 
 type PageState = 'select' | 'community' | 'reference' | 'classification' | 'environment-check' | 'recording' | 'review' | 'success'
 
-interface Frame {
+export interface Frame {
   frame_number: number
   timestamp: number
   pose_landmarks: any[]
@@ -95,6 +95,12 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
     recommendations: string[]
   } | null>(null)
 
+  // FPS monitoring state
+  const [fpsStats, setFpsStats] = useState<{
+    targetFps: number
+    actualFps: number | null
+  }>({ targetFps: 30, actualFps: null })
+
   // Auto-select word from URL parameter
   useEffect(() => {
     const wordParam = searchParams.get('word')
@@ -112,6 +118,7 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
   const frameCountRef = useRef<number>(0)
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const stopRecordingRef = useRef<(() => void) | null>(null)
+  const hasNavigatedFromEnvCheckRef = useRef<boolean>(false)
 
   // Track recording progress and auto-stop fallback
   useEffect(() => {
@@ -124,9 +131,9 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
         const elapsed = (Date.now() - recordingStartTimeRef.current) / 1000
         console.log('⏱ Timer tick:', elapsed.toFixed(2), 's')
         setRecordingElapsed(elapsed)
-        setRecordingProgress((elapsed / 4.0) * 100)
+        setRecordingProgress((elapsed / 5.0) * 100)
 
-        if (elapsed >= 4.5) {
+        if (elapsed >= 5.5) {
           console.log('⏱ Timer fallback stopping recording at', elapsed.toFixed(2), 's')
           clearInterval(recordingTimerRef.current!)
           stopRecording()
@@ -148,50 +155,136 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
     }
   }, [isRecording])
 
-  // Auto-advance from success state after 3 seconds (back to recording for another cycle)
-  useEffect(() => {
-    if (pageState === 'success') {
-      const handleAutoAdvance = () => {
-        console.log('⏰ Auto-advancing from success to recording')
-        setCurrentAttempt(1)
-        setAttemptData([])
-        setRecordedFrames([])
-        setPageState('recording')
-      }
+  // REMOVED: Auto-advance from success state
+  // Users now manually choose to contribute another sign via "Contribute Another" button
+  // This gives them time to review their contribution and prevents unexpected navigation
 
-      if (testMode) {
-        // In test mode, don't auto-advance immediately, let timers be controlled
-        const timer = setTimeout(handleAutoAdvance, 3000)
-        return () => clearTimeout(timer)
-      } else {
-        // Production: auto-advance after 3 seconds
-        const timer = setTimeout(handleAutoAdvance, 3000)
-        return () => clearTimeout(timer)
-      }
+  // Auto-navigate from environment-check to recording when hands are detected
+  useEffect(() => {
+    if (pageState === 'environment-check' && environmentCheck?.can_proceed && !hasNavigatedFromEnvCheckRef.current) {
+      console.log('✅ Hands detected! Auto-navigating to recording...')
+      toast.success('Hands detected! Starting recording...', { duration: 2000 })
+
+      // Mark as navigating immediately to prevent re-triggers
+      hasNavigatedFromEnvCheckRef.current = true
+
+      // Navigate after showing toast
+      const timer = setTimeout(() => {
+        console.log('🚀 Navigating to recording page...')
+        setPageState('recording')
+      }, 1500)
+
+      return () => clearTimeout(timer)
     }
-  }, [pageState, testMode])
+  }, [pageState, environmentCheck?.can_proceed])
+
+  // Reset navigation flag when entering environment-check page
+  useEffect(() => {
+    if (pageState === 'environment-check') {
+      hasNavigatedFromEnvCheckRef.current = false
+      console.log('🔄 Reset navigation flag for environment-check')
+    }
+  }, [pageState])
 
   const initializeMediaPipe = async () => {
-    if (!webcamRef.current?.video) return
+    if (!webcamRef.current?.video) {
+      console.error('❌ initializeMediaPipe: No video element available')
+      return
+    }
 
     const videoElement = webcamRef.current.video as HTMLVideoElement
 
-    mediaPipeHandlerRef.current = new MediaPipeHandler(videoElement, handleLandmarkResults)
+    // Log webcam initialization details
+    console.log('📹 ========== WEBCAM INITIALIZATION ==========')
+    console.log('✓ Video Element Properties:', {
+      videoWidth: videoElement.videoWidth,
+      videoHeight: videoElement.videoHeight,
+      readyState: videoElement.readyState,
+      readyStateLabel: ['HAVE_NOTHING', 'HAVE_METADATA', 'HAVE_CURRENT_DATA', 'HAVE_FUTURE_DATA', 'HAVE_ENOUGH_DATA'][videoElement.readyState],
+      srcObject: videoElement.srcObject ? 'present' : 'missing'
+    })
+
+    // Check if srcObject (MediaStream) is available
+    if (videoElement.srcObject) {
+      const stream = videoElement.srcObject as MediaStream
+      const videoTracks = stream.getVideoTracks()
+
+      if (videoTracks.length > 0) {
+        const track = videoTracks[0]
+        const settings = track.getSettings()
+        const constraints = track.getConstraints()
+
+        console.log('✓ MediaStream Video Track:', {
+          label: track.label,
+          enabled: track.enabled,
+          muted: track.muted,
+          readyState: track.readyState
+        })
+        console.log('✓ Applied Track Settings:', {
+          width: settings.width,
+          height: settings.height,
+          frameRate: settings.frameRate,
+          facingMode: settings.facingMode,
+          deviceId: settings.deviceId
+        })
+        console.log('✓ Requested Track Constraints:', constraints)
+      } else {
+        console.error('❌ No video tracks found in MediaStream')
+      }
+    } else {
+      console.error('❌ No MediaStream (srcObject) attached to video element')
+    }
+
+    // Initialize with 30 FPS target
+    console.log('🔧 Creating MediaPipeHandler with target FPS: 30')
+    mediaPipeHandlerRef.current = new MediaPipeHandler(videoElement, handleLandmarkResults, 30)
 
     try {
+      console.log('⏳ Initializing MediaPipe...')
       await mediaPipeHandlerRef.current.initialize()
+
+      console.log('⏳ Starting MediaPipe processing...')
       await mediaPipeHandlerRef.current.start()
-      console.log('✓ MediaPipe ready for recording')
+
+      // Get and display FPS stats
+      const stats = mediaPipeHandlerRef.current.getStats()
+      setFpsStats(stats)
+
+      console.log('✅ MediaPipe ready for recording')
+      console.log('📊 FPS Stats:', stats)
+      console.log('📹 ==========================================')
+
+      // Warn if FPS is low
+      if (stats.actualFps && stats.actualFps < 20) {
+        toast.error(
+          `⚠️ Low camera FPS detected (${stats.actualFps.toFixed(1)} FPS). Recording quality may be affected.`,
+          { duration: 5000 }
+        )
+      }
     } catch (error) {
-      console.error('Failed to initialize MediaPipe:', error)
+      console.error('❌ Failed to initialize MediaPipe:', error)
       toast.error('Failed to start camera. Please check permissions and try again.', { duration: 5000 })
     }
   }
 
+  // Update FPS stats periodically
+  useEffect(() => {
+    if (pageState === 'recording' && mediaPipeHandlerRef.current) {
+      const interval = setInterval(() => {
+        const stats = mediaPipeHandlerRef.current?.getStats()
+        if (stats) {
+          setFpsStats(stats)
+        }
+      }, 1000) // Update every second
+
+      return () => clearInterval(interval)
+    }
+  }, [pageState])
+
   const handleLandmarkResults = useCallback((results: LandmarkResult) => {
     console.log('📸 handleLandmarkResults called, pageState:', pageState, 'isRecording:', isRecordingRef.current)
 
-    // Draw skeleton overlay
+    // Draw skeleton overlay (HIDE during recording for distraction-free experience)
     if (canvasRef.current && webcamRef.current?.video) {
       const video = webcamRef.current.video
       const canvas = canvasRef.current
@@ -203,7 +296,17 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
         canvas.height = rect.height
       }
 
-      drawSkeletonOverlay(canvas, results, rect.width, rect.height)
+      // Only show skeleton during environment-check, hide during active recording
+      const showSkeleton = pageState === 'environment-check' || (pageState === 'recording' && !isRecordingRef.current)
+      if (showSkeleton) {
+        drawSkeletonOverlay(canvas, results, rect.width, rect.height)
+      } else {
+        // Clear canvas during recording
+        const ctx = canvas.getContext('2d')
+        if (ctx) {
+          ctx.clearRect(0, 0, canvas.width, canvas.height)
+        }
+      }
     }
 
     // Real-time client-side environment check (fast, no API call)
@@ -281,8 +384,8 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
         return [...prev, frame]
       })
 
-      // Stop after 4 seconds (increased from 3 to ensure minimum 30 frames)
-      if (elapsed >= 4.0 && stopRecordingRef.current) {
+      // Stop after 5 seconds (increased from 4 to ensure minimum 30 frames at ~7.25 FPS)
+      if (elapsed >= 5.0 && stopRecordingRef.current) {
         stopRecordingRef.current()
       }
     }
@@ -337,21 +440,58 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
     return totalVisibility / lastFrames.length
   }, [recordedFrames])
 
+  // Handler for when webcam stream is ready
+  const handleWebcamReady = useCallback((stream: MediaStream) => {
+    console.log('📹 ========== WEBCAM STREAM READY ==========')
+    console.log('✓ onUserMedia callback fired')
+
+    const videoTracks = stream.getVideoTracks()
+    if (videoTracks.length > 0) {
+      const track = videoTracks[0]
+      const settings = track.getSettings()
+
+      console.log('✓ Stream created with settings:', {
+        width: settings.width,
+        height: settings.height,
+        frameRate: settings.frameRate,
+        facingMode: settings.facingMode
+      })
+
+      if (settings.frameRate) {
+        if (settings.frameRate >= 25) {
+          console.log(`✅ EXCELLENT: Stream initialized at ${settings.frameRate} FPS`)
+        } else if (settings.frameRate >= 20) {
+          console.log(`⚠️ MARGINAL: Stream initialized at ${settings.frameRate} FPS`)
+        } else {
+          console.error(`❌ LOW: Stream initialized at ${settings.frameRate} FPS`)
+        }
+      }
+    }
+    console.log('📹 ==========================================')
+
+    // Now initialize MediaPipe with the ready stream
+    if (pageState === 'recording' || pageState === 'environment-check') {
+      console.log('⏳ Stream ready, initializing MediaPipe...')
+      initializeMediaPipe()
+    }
+  }, [pageState])
+
   // Initialize MediaPipe when entering recording or environment-check state
   // IMPORTANT: Re-initialize when handleLandmarkResults changes to fix stale closure bug
   useEffect(() => {
-    if ((pageState === 'recording' || pageState === 'environment-check') && webcamRef.current?.video) {
-      // Dispose existing handler before creating new one
+    // Only dispose existing handler, don't initialize yet (wait for onUserMedia)
+    if (pageState === 'recording' || pageState === 'environment-check') {
       if (mediaPipeHandlerRef.current) {
         console.log('🔄 Re-initializing MediaPipe with fresh callback')
         mediaPipeHandlerRef.current.dispose()
+        mediaPipeHandlerRef.current = null
       }
-      initializeMediaPipe()
     }
 
     return () => {
       if (mediaPipeHandlerRef.current) {
         mediaPipeHandlerRef.current.dispose()
+        mediaPipeHandlerRef.current = null
       }
     }
   }, [pageState, handleLandmarkResults])
@@ -634,10 +774,18 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
       }
     }
 
+    // Cap frames at 150 (API maximum) by evenly sampling if needed
+    let framesToSubmit = frames
+    if (frames.length > 150) {
+      console.warn(`⚠️ Recording has ${frames.length} frames, sampling down to 150 for API compliance`)
+      const step = frames.length / 150
+      framesToSubmit = Array.from({ length: 150 }, (_, i) => frames[Math.floor(i * step)])
+    }
+
     try {
       // Helper to clamp values between 0 and 1
       const clamp = (val: number) => Math.max(0, Math.min(1, val))
-      
+
       // Helper to normalize a landmark
       const normalizeLandmark = (lm: any) => ({
         x: clamp(lm.x),
@@ -647,7 +795,7 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
       })
 
       // Validate and normalize frames for API
-      const validatedFrames = frames.map((frame, idx) => {
+      const validatedFrames = framesToSubmit.map((frame, idx) => {
         // Ensure pose_landmarks has exactly 33 items (pad with zeros if needed)
         const poseLandmarks = (frame.pose_landmarks || []).map(normalizeLandmark)
         const normalizedPose = poseLandmarks.slice(0, 33)
@@ -898,8 +1046,10 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
               videoConstraints={{
                 facingMode: 'user',
                 width: 1280,
-                height: 720
+                height: 720,
+                frameRate: { ideal: 30, min: 20 }
               }}
+              onUserMedia={handleWebcamReady}
               className="w-full"
             />
             <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none" />
@@ -1005,23 +1155,35 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
       <>
       <Toaster position="top-center" reverseOrder={false} />
       <div className="min-h-screen bg-black md:bg-gradient-to-br md:from-blue-50 md:to-indigo-100 md:p-6">
-        <div className="h-screen md:h-auto md:max-w-5xl md:mx-auto flex flex-col">
-          {/* Mobile: Compact Header Overlay | Desktop: Normal Header */}
-          <div className="md:hidden absolute top-0 left-0 right-0 z-20 bg-gradient-to-b from-black/80 to-transparent p-4 pb-8">
-            <div className="flex items-center justify-between">
-              <div>
-                <h1 className="text-lg font-bold text-white">
-                  {selectedWord}
-                </h1>
-                <p className="text-xs text-white/80">Attempt {currentAttempt}/3</p>
-              </div>
-              {isRecording && (
-                <div className="flex items-center gap-2 bg-red-600 px-3 py-1.5 rounded-full">
-                  <div className="w-3 h-3 bg-white rounded-full animate-pulse"></div>
-                  <span className="text-white text-sm font-bold">{recordingElapsed.toFixed(1)}s</span>
+        <div className="min-h-screen md:h-auto md:max-w-5xl md:mx-auto flex flex-col">
+          {/* Mobile: Minimal Header During Recording | Full Header When Not Recording */}
+          <div className="md:hidden sticky top-0 left-0 right-0 z-20 bg-gradient-to-b from-black/90 to-black/70 backdrop-blur-sm p-4 safe-area-inset-top">
+            {isRecording ? (
+              /* MINIMAL: Just timer and stop button during recording */
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3 bg-red-600 px-4 py-2 rounded-full">
+                  <div className="w-4 h-4 bg-white rounded-full animate-pulse"></div>
+                  <span className="text-white text-2xl font-bold tabular-nums">{recordingElapsed.toFixed(1)}s</span>
+                  <span className="text-white/80 text-sm">/ 5.0s</span>
                 </div>
-              )}
-            </div>
+                <button
+                  onClick={stopRecording}
+                  className="bg-white/20 backdrop-blur-sm text-white px-4 py-2 rounded-full font-semibold text-sm hover:bg-white/30 transition-all"
+                >
+                  Stop
+                </button>
+              </div>
+            ) : (
+              /* FULL: Show word and attempt info when not recording */
+              <div className="flex items-center justify-between">
+                <div>
+                  <h1 className="text-lg font-bold text-white">
+                    {selectedWord}
+                  </h1>
+                  <p className="text-xs text-white/80">Attempt {currentAttempt}/3</p>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Desktop Header */}
@@ -1043,6 +1205,36 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
           {/* Real-Time Quality Indicators - Desktop Only */}
           {pageState === 'recording' && isRecording && (
             <div className="hidden md:block absolute top-24 right-6 z-30 space-y-3 max-w-xs">
+              {/* FPS Monitor */}
+              <div className={`bg-white rounded-lg p-4 shadow-lg border-2 ${
+                fpsStats.actualFps && fpsStats.actualFps < 20
+                  ? 'border-red-500'
+                  : fpsStats.actualFps && fpsStats.actualFps < 25
+                  ? 'border-yellow-500'
+                  : 'border-green-500'
+              }`}>
+                <div className="text-xs font-semibold text-gray-500 mb-1">RECORDING FPS</div>
+                <div className="flex items-baseline gap-2">
+                  <div className={`text-3xl font-bold ${
+                    fpsStats.actualFps && fpsStats.actualFps < 20
+                      ? 'text-red-600'
+                      : fpsStats.actualFps && fpsStats.actualFps < 25
+                      ? 'text-yellow-600'
+                      : 'text-green-600'
+                  }`}>
+                    {fpsStats.actualFps?.toFixed(1) || '--'}
+                  </div>
+                  <div className="text-sm text-gray-500">
+                    / {fpsStats.targetFps} FPS
+                  </div>
+                </div>
+                {fpsStats.actualFps && fpsStats.actualFps < 20 && (
+                  <div className="mt-2 text-xs text-red-600">
+                    ⚠️ Low FPS - Consider better lighting
+                  </div>
+                )}
+              </div>
+
               <HandVisibilityIndicator
                 handVisibility={calculateCurrentHandVisibility()}
                 showPercentage={true}
@@ -1059,8 +1251,8 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
             </div>
           )}
 
-          {/* Video + Canvas Container - Full Screen on Mobile */}
-          <div className="relative flex-1 md:flex-none bg-black md:rounded-2xl overflow-hidden md:shadow-2xl md:mb-6 md:aspect-video">
+          {/* Video + Canvas Container - Flexible height on mobile to show controls */}
+          <div className="relative flex-1 md:flex-none bg-black md:rounded-2xl overflow-hidden md:shadow-2xl md:mb-6 md:aspect-video max-h-[calc(100vh-180px)] md:max-h-none">
             <Webcam
               ref={webcamRef}
               audio={false}
@@ -1068,8 +1260,10 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
               videoConstraints={{
                 width: 1280,
                 height: 720,
-                facingMode: 'user'
+                facingMode: 'user',
+                frameRate: { ideal: 30, min: 20 }
               }}
+              onUserMedia={handleWebcamReady}
               className="w-full h-full object-cover"
             />
 
@@ -1089,20 +1283,29 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
               </div>
             )}
 
-            {/* Mobile Recording Progress Bar */}
+            {/* Mobile Recording Progress Bar - Thicker and more visible */}
             {isRecording && (
-              <div className="md:hidden absolute bottom-0 left-0 right-0 h-2 bg-black/30">
-                <div
-                  className="h-full bg-red-600 transition-all duration-100"
-                  style={{ width: `${recordingProgress}%` }}
-                ></div>
+              <div className="md:hidden absolute bottom-0 left-0 right-0">
+                {/* Progress bar */}
+                <div className="h-3 bg-black/50 backdrop-blur-sm">
+                  <div
+                    className="h-full bg-gradient-to-r from-red-600 to-red-500 transition-all duration-100"
+                    style={{ width: `${recordingProgress}%` }}
+                  ></div>
+                </div>
+                {/* Attempt indicator below progress */}
+                <div className="bg-black/70 backdrop-blur-sm py-2 px-4 text-center">
+                  <span className="text-white text-xs font-semibold">
+                    Attempt {currentAttempt} of 3
+                  </span>
+                </div>
               </div>
             )}
           </div>
 
-          {/* Controls - Bottom on Mobile, Normal on Desktop */}
+          {/* Controls - Always visible at bottom */}
           {pageState === 'recording' && !isRecording && countdown === null && !showAttemptReview && (
-            <div className="absolute md:relative bottom-0 left-0 right-0 md:bottom-auto md:left-auto md:right-auto bg-gradient-to-t from-black/90 to-transparent md:bg-transparent p-6 md:p-0 md:text-center">
+            <div className="mt-auto bg-gradient-to-t from-black/95 via-black/90 to-black/70 md:bg-transparent p-6 md:p-0 md:text-center backdrop-blur-sm">
               <button
                 onClick={startCountdown}
                 className="w-full md:w-auto bg-red-600 hover:bg-red-700 text-white font-bold py-4 px-8 rounded-full md:rounded-xl transition-all duration-200 transform hover:scale-105 shadow-2xl text-lg md:text-xl flex items-center justify-center gap-3"
@@ -1118,7 +1321,7 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
 
           {/* Attempt Review - Show button to start next attempt (in test mode or after review delay) */}
           {pageState === 'recording' && !isRecording && countdown === null && showAttemptReview && currentAttempt < maxAttempts && (
-            <div className="absolute md:relative bottom-0 left-0 right-0 md:bottom-auto md:left-auto md:right-auto bg-gradient-to-t from-black/90 to-transparent md:bg-transparent p-6 md:p-0 md:text-center">
+            <div className="mt-auto bg-gradient-to-t from-black/95 via-black/90 to-black/70 md:bg-transparent p-6 md:p-0 md:text-center backdrop-blur-sm">
               <button
                 onClick={() => {
                   // Increment to next attempt and start recording
@@ -1288,6 +1491,9 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
           <div className="flex flex-col sm:flex-row gap-4">
             <button
               onClick={() => {
+                // Reset all attempt data for new recording cycle
+                setCurrentAttempt(1)
+                setAttemptData([])
                 setRecordedFrames([])
                 setPageState('recording')
               }}
