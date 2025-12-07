@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Analytics } from '@vercel/analytics/next';
 import { SpeedInsights } from '@vercel/speed-insights/next';
+import { SessionProvider } from '@/components/auth/SessionProvider';
 import GlobalFooter from '@/components/GlobalFooter';
 import "./globals.css";
 
@@ -30,8 +31,8 @@ export const metadata: Metadata = {
     "FAISS vector search",
     "Ghana education technology"
   ],
-  authors: [{ name: "SignForge Hackathon Team" }],
-  creator: "SignForge Hackathon 2025",
+  authors: [{ name: "SignForge Team" }],
+  creator: "SignForge 2025",
   publisher: "SignForge",
   applicationName: "Ghana Sign Language Dictionary",
   generator: "Next.js 15",
@@ -96,8 +97,10 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        {children}
-        <GlobalFooter />
+        <SessionProvider>
+          {children}
+          <GlobalFooter />
+        </SessionProvider>
         <Analytics />
         <SpeedInsights />
       </body>

@@ -1,5 +1,5 @@
 import { Suspense } from 'react'
-import ContributionPage from '@/components/contribution/ContributionPage'
+import ContributePageWrapper from '@/components/contribution/ContributePageWrapper'
 
 export const metadata = {
   title: 'Contribute - SignForge GSL',
@@ -16,7 +16,7 @@ export default function Contribute() {
         </div>
       </div>
     }>
-      <ContributionPage />
+      <ContributePageWrapper maxAttempts={1} />
     </Suspense>
   )
 }
