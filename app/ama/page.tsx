@@ -2,12 +2,23 @@
 
 import React, { useState, useEffect, useMemo } from 'react'
 import { Activity, Users, TrendingUp, Award, Database, Download, RefreshCw, BarChart3, Eye, Trash2, Edit2, X, Lock, Unlock, Search, Sparkles, Play, Pause, Video, Zap } from 'lucide-react'
+import { useSession } from 'next-auth/react'
 import VideoPlayer from '../../components/VideoPlayer'
 import SkeletonVisualizer from '../../components/SkeletonVisualizer'
 import ContributionPreviewModal from '../../components/admin/ContributionPreviewModal'
 
 // API Base URL
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:9000'
+
+/**
+ * Admin-authenticated fetch helper
+ * Automatically adds X-Admin-User-Id header
+ */
+async function adminFetch(url: string, userEmail: string, options: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(options.headers)
+  headers.set('X-Admin-User-Id', userEmail)
+  return fetch(url, { ...options, headers })
+}
 
 // Types
 interface SystemOverview {
@@ -163,6 +174,9 @@ interface GeneratedVideosStats {
 }
 
 export default function AdminDashboard() {
+  const { data: session } = useSession()
+  const userEmail = session?.user?.email || ''
+
   const [activeTab, setActiveTab] = useState<'overview' | 'words' | 'contributions' | 'analytics' | 'quality' | 'studio' | 'skeletons' | 'generated-videos'>('overview')
   const [overview, setOverview] = useState<SystemOverview | null>(null)
   const [words, setWords] = useState<WordStats[]>([])
@@ -234,8 +248,9 @@ export default function AdminDashboard() {
 
   // Fetch data
   const fetchOverview = async () => {
+    if (!userEmail) return
     try {
-      const res = await fetch(`${API_URL}/api/ama/overview`)
+      const res = await adminFetch(`${API_URL}/api/ama/overview`, userEmail)
       if (!res.ok) throw new Error('Failed to fetch overview')
       const data = await res.json()
       setOverview(data)
@@ -245,8 +260,9 @@ export default function AdminDashboard() {
   }
 
   const fetchWords = async () => {
+    if (!userEmail) return
     try {
-      const res = await fetch(`${API_URL}/api/ama/words?limit=2000`)
+      const res = await adminFetch(`${API_URL}/api/ama/words?limit=2000`, userEmail)
       if (!res.ok) throw new Error('Failed to fetch words')
       const data = await res.json()
       setWords(data)
@@ -257,8 +273,9 @@ export default function AdminDashboard() {
   }
 
   const fetchTrends = async () => {
+    if (!userEmail) return
     try {
-      const res = await fetch(`${API_URL}/api/ama/analytics/trends?days=30`)
+      const res = await adminFetch(`${API_URL}/api/ama/analytics/trends?days=30`, userEmail)
       if (!res.ok) throw new Error('Failed to fetch trends')
       const data = await res.json()
       setTrends(data)
@@ -268,8 +285,9 @@ export default function AdminDashboard() {
   }
 
   const fetchLeaderboard = async () => {
+    if (!userEmail) return
     try {
-      const res = await fetch(`${API_URL}/api/ama/analytics/leaderboard?metric=contributions&limit=50`)
+      const res = await adminFetch(`${API_URL}/api/ama/analytics/leaderboard?metric=contributions&limit=50`, userEmail)
       if (!res.ok) throw new Error('Failed to fetch leaderboard')
       const data = await res.json()
       setLeaderboard(data.leaderboard)
@@ -279,8 +297,9 @@ export default function AdminDashboard() {
   }
 
   const fetchQualityReport = async () => {
+    if (!userEmail) return
     try {
-      const res = await fetch(`${API_URL}/api/ama/quality-report`)
+      const res = await adminFetch(`${API_URL}/api/ama/quality-report`, userEmail)
       if (!res.ok) throw new Error('Failed to fetch quality report')
       const data = await res.json()
       setQualityReport(data)
@@ -290,8 +309,9 @@ export default function AdminDashboard() {
   }
 
   const fetchContributions = async () => {
+    if (!userEmail) return
     try {
-      const res = await fetch(`${API_URL}/api/ama/contributions?limit=50`)
+      const res = await adminFetch(`${API_URL}/api/ama/contributions?limit=50`, userEmail)
       if (!res.ok) throw new Error('Failed to fetch contributions')
       const data = await res.json()
       setContributions(data)
@@ -301,8 +321,9 @@ export default function AdminDashboard() {
   }
 
   const deleteContribution = async (contributionId: string) => {
+    if (!userEmail) return
     try {
-      const res = await fetch(`${API_URL}/api/ama/contributions/${contributionId}`, {
+      const res = await adminFetch(`${API_URL}/api/ama/contributions/${contributionId}`, userEmail, {
         method: 'DELETE'
       })
       if (!res.ok) throw new Error('Failed to delete contribution')
@@ -315,9 +336,10 @@ export default function AdminDashboard() {
   }
 
   const toggleWordStatus = async (word: string, currentlyOpen: boolean) => {
+    if (!userEmail) return
     try {
       const action = currentlyOpen ? 'close' : 'open'
-      const res = await fetch(`${API_URL}/api/ama/words/${word}/${action}`, {
+      const res = await adminFetch(`${API_URL}/api/ama/words/${word}/${action}`, userEmail, {
         method: 'POST'
       })
       if (!res.ok) throw new Error(`Failed to ${action} word`)
@@ -330,8 +352,9 @@ export default function AdminDashboard() {
 
   // AI Studio functions
   const fetchTrainingStatus = async () => {
+    if (!userEmail) return
     try {
-      const res = await fetch(`${API_URL}/api/admin/training/status`)
+      const res = await adminFetch(`${API_URL}/api/admin/training/status`, userEmail)
       if (!res.ok) throw new Error('Failed to fetch training status')
       const data = await res.json()
       setTrainingStatus(data)
@@ -341,13 +364,14 @@ export default function AdminDashboard() {
   }
 
   const startTraining = async () => {
+    if (!userEmail) return
     if (!confirm('Start full AI training pipeline? This will process ~10,000 videos and train models.')) {
       return
     }
 
     setIsStarting(true)
     try {
-      const res = await fetch(`${API_URL}/api/admin/training/start`, {
+      const res = await adminFetch(`${API_URL}/api/admin/training/start`, userEmail, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -370,13 +394,14 @@ export default function AdminDashboard() {
   }
 
   const stopTraining = async () => {
+    if (!userEmail) return
     if (!confirm('Stop training? Progress will be saved.')) {
       return
     }
 
     setIsStopping(true)
     try {
-      const res = await fetch(`${API_URL}/api/admin/training/stop`, {
+      const res = await adminFetch(`${API_URL}/api/admin/training/stop`, userEmail, {
         method: 'POST'
       })
       if (!res.ok) throw new Error('Failed to stop training')
@@ -394,7 +419,7 @@ export default function AdminDashboard() {
   // Download video function
   const downloadVideo = async (videoPath: string, filename: string) => {
     try {
-      const res = await fetch(`${API_URL}${videoPath}`)
+      const res = await adminFetch(`${API_URL}${videoPath}`, userEmail)
       const blob = await res.blob()
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -413,7 +438,7 @@ export default function AdminDashboard() {
   // Skeleton Preview functions - Use working skeleton-preview API
   const fetchSkeletonStats = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/skeleton-preview/stats`)
+      const res = await adminFetch(`${API_URL}/api/skeleton-preview/stats`, userEmail)
       if (!res.ok) throw new Error('Failed to fetch skeleton stats')
       const data = await res.json()
       setSkeletonStats(data)
@@ -424,7 +449,7 @@ export default function AdminDashboard() {
 
   const fetchSkeletons = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/skeleton-preview/available`)
+      const res = await adminFetch(`${API_URL}/api/skeleton-preview/available`, userEmail)
       if (!res.ok) throw new Error('Failed to fetch skeletons')
       const data = await res.json()
       setSkeletons(data.skeletons || [])
@@ -437,7 +462,7 @@ export default function AdminDashboard() {
   const loadSkeletonPose = async (skeletonId: string) => {
     setLoadingSkeleton(true)
     try {
-      const res = await fetch(`${API_URL}/api/skeleton-preview/pose/${skeletonId}`)
+      const res = await adminFetch(`${API_URL}/api/skeleton-preview/pose/${skeletonId}`, userEmail)
       if (!res.ok) throw new Error('Failed to fetch skeleton pose')
       const data = await res.json()
       setSelectedSkeleton(data)
@@ -452,7 +477,7 @@ export default function AdminDashboard() {
   // Generated Videos functions
   const fetchGeneratedVideos = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/generated-videos/?limit=50&status=completed`)
+      const res = await adminFetch(`${API_URL}/api/generated-videos/?limit=50&status=completed`, userEmail)
       if (!res.ok) throw new Error('Failed to fetch generated videos')
       const data = await res.json()
       setGeneratedVideos(data)
@@ -464,7 +489,7 @@ export default function AdminDashboard() {
 
   const fetchGeneratedVideosStats = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/generated-videos/stats/summary`)
+      const res = await adminFetch(`${API_URL}/api/generated-videos/stats/summary`, userEmail)
       if (!res.ok) throw new Error('Failed to fetch generated videos stats')
       const data = await res.json()
       setGeneratedVideosStats(data)
@@ -742,9 +767,33 @@ export default function AdminDashboard() {
         {activeTab === 'contributions' && (
           <div className="space-y-6">
             <div className="bg-white rounded-xl shadow-md overflow-hidden">
-              <div className="p-4 sm:p-6 border-b border-gray-200 flex items-center justify-between">
-                <h2 className="text-xl sm:text-2xl font-bold text-gray-900">All Contributions</h2>
-                <p className="text-sm text-gray-700">{contributions.length} contributions</p>
+              <div className="p-4 sm:p-6 border-b border-gray-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                  <h2 className="text-xl sm:text-2xl font-bold text-gray-900">All Contributions</h2>
+                  <p className="text-sm text-gray-600">{contributions.length} contributions</p>
+                </div>
+                {contributions.length > 0 && (
+                  <button
+                    onClick={async () => {
+                      if (!confirm(`⚠️ DELETE ALL ${contributions.length} CONTRIBUTIONS?\n\nThis will permanently delete:\n• All contribution data\n• Associated votes, flags, and comments\n\nThis action CANNOT be undone!`)) return
+                      if (!confirm('Are you ABSOLUTELY sure? Type "DELETE" mentally and click OK to proceed.')) return
+                      try {
+                        const res = await adminFetch(`${API_URL}/api/ama/contributions?confirm=true`, userEmail, { method: 'DELETE' })
+                        if (!res.ok) throw new Error('Failed to delete contributions')
+                        const data = await res.json()
+                        alert(`✅ ${data.deleted_count} contributions deleted`)
+                        fetchContributions()
+                        fetchOverview()
+                      } catch (err) {
+                        alert('Failed to delete: ' + (err instanceof Error ? err.message : 'Unknown error'))
+                      }
+                    }}
+                    className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm font-semibold"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Delete All
+                  </button>
+                )}
               </div>
 
               {contributions.length === 0 ? (
@@ -753,48 +802,49 @@ export default function AdminDashboard() {
                   <p className="text-sm">Contributions will appear here once users start submitting sign recordings.</p>
                 </div>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[768px]">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Word</th>
-                        <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">User ID</th>
-                        <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Quality</th>
-                        <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Frames</th>
-                        <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Duration</th>
-                        <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Created</th>
-                        <th className="px-3 sm:px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {contributions.map(contrib => (
-                        <tr key={contrib.contribution_id} className="hover:bg-gray-50">
-                          <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap font-semibold text-gray-900 text-sm sm:text-base">
-                            {contrib.word}
-                          </td>
-                          <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-gray-900 text-xs sm:text-sm">
-                            {contrib.user_id.substring(0, 12)}...
-                          </td>
-                          <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
-                            <span className={`font-semibold text-sm ${
-                              contrib.quality_score >= 0.8 ? 'text-green-700' :
-                              contrib.quality_score >= 0.6 ? 'text-blue-700' :
-                              'text-yellow-700'
-                            }`}>
-                              {(contrib.quality_score * 100).toFixed(1)}%
-                            </span>
-                          </td>
-                          <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-gray-900 text-sm">
-                            {contrib.num_frames}
-                          </td>
-                          <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-gray-900 text-sm">
-                            {contrib.duration.toFixed(2)}s
-                          </td>
-                          <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-gray-700 text-xs sm:text-sm">
-                            {new Date(contrib.created_at).toLocaleDateString()}
-                          </td>
-                          <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
-                            <div className="flex items-center gap-2">
+                <>
+                  {/* Desktop Table View */}
+                  <div className="hidden md:block overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Word</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">User ID</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Quality</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Frames</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Duration</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Created</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {contributions.map(contrib => (
+                          <tr key={contrib.contribution_id} className="hover:bg-gray-50">
+                            <td className="px-6 py-4 whitespace-nowrap font-semibold text-gray-900">
+                              {contrib.word}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-gray-900 text-sm">
+                              {contrib.user_id.substring(0, 12)}...
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <span className={`font-semibold ${
+                                contrib.quality_score >= 0.8 ? 'text-green-700' :
+                                contrib.quality_score >= 0.6 ? 'text-blue-700' :
+                                'text-yellow-700'
+                              }`}>
+                                {(contrib.quality_score * 100).toFixed(1)}%
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-gray-900">
+                              {contrib.num_frames}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-gray-900">
+                              {contrib.duration.toFixed(2)}s
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-gray-700 text-sm">
+                              {new Date(contrib.created_at).toLocaleDateString()}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
                               <button
                                 onClick={() => setPreviewContributionId(contrib.id)}
                                 className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
@@ -802,13 +852,65 @@ export default function AdminDashboard() {
                               >
                                 <Eye className="w-4 h-4" />
                               </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Mobile Card View */}
+                  <div className="md:hidden space-y-3 p-4">
+                    {contributions.map(contrib => (
+                      <div
+                        key={contrib.contribution_id}
+                        className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm"
+                      >
+                        {/* Header with Word and Quality */}
+                        <div className="flex items-center justify-between mb-3">
+                          <h3 className="font-bold text-lg text-gray-900">{contrib.word}</h3>
+                          <span className={`px-3 py-1 rounded-full text-sm font-semibold ${
+                            contrib.quality_score >= 0.8 ? 'bg-green-100 text-green-800' :
+                            contrib.quality_score >= 0.6 ? 'bg-blue-100 text-blue-800' :
+                            'bg-yellow-100 text-yellow-800'
+                          }`}>
+                            {(contrib.quality_score * 100).toFixed(0)}%
+                          </span>
+                        </div>
+
+                        {/* Stats Grid */}
+                        <div className="grid grid-cols-3 gap-3 mb-3 text-center">
+                          <div className="bg-gray-50 rounded-lg p-2">
+                            <p className="text-xs text-gray-500">Frames</p>
+                            <p className="font-semibold text-gray-900">{contrib.num_frames}</p>
+                          </div>
+                          <div className="bg-gray-50 rounded-lg p-2">
+                            <p className="text-xs text-gray-500">Duration</p>
+                            <p className="font-semibold text-gray-900">{contrib.duration.toFixed(1)}s</p>
+                          </div>
+                          <div className="bg-gray-50 rounded-lg p-2">
+                            <p className="text-xs text-gray-500">Date</p>
+                            <p className="font-semibold text-gray-900 text-xs">{new Date(contrib.created_at).toLocaleDateString()}</p>
+                          </div>
+                        </div>
+
+                        {/* User ID and Action */}
+                        <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+                          <span className="text-xs text-gray-500 truncate max-w-[60%]">
+                            {contrib.user_id}
+                          </span>
+                          <button
+                            onClick={() => setPreviewContributionId(contrib.id)}
+                            className="flex items-center gap-1 px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                          >
+                            <Eye className="w-4 h-4" />
+                            View
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
               )}
             </div>
           </div>

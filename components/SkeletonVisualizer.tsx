@@ -2,11 +2,16 @@
 
 import React, { useRef, useEffect, useState } from 'react'
 
-interface PoseLandmark {
-  x: number
-  y: number
-  z: number
-  visibility: number
+// PoseLandmark can be either array format [x, y, z, visibility] or object format {x, y, z, visibility}
+type PoseLandmark = number[] | { x: number; y: number; z: number; visibility: number }
+
+// Helper to get landmark values regardless of format
+const getLandmarkValue = (landmark: PoseLandmark, index: 0 | 1 | 2 | 3): number => {
+  if (Array.isArray(landmark)) {
+    return landmark[index] ?? 0
+  }
+  const keys: (keyof typeof landmark)[] = ['x', 'y', 'z', 'visibility']
+  return (landmark as { x: number; y: number; z: number; visibility: number })[keys[index]] ?? 0
 }
 
 interface SkeletonVisualizerProps {
@@ -110,13 +115,13 @@ export default function SkeletonVisualizer({
     if (!frame) return
 
     // Calculate bounding box for centering and scaling
-    const visiblePoints = frame.filter(p => p && p[3] > 0.3)
+    const visiblePoints = frame.filter(p => p && getLandmarkValue(p, 3) > 0.3)
     if (visiblePoints.length === 0) return
 
-    const minX = Math.min(...visiblePoints.map(p => p[0]))
-    const maxX = Math.max(...visiblePoints.map(p => p[0]))
-    const minY = Math.min(...visiblePoints.map(p => p[1]))
-    const maxY = Math.max(...visiblePoints.map(p => p[1]))
+    const minX = Math.min(...visiblePoints.map(p => getLandmarkValue(p, 0)))
+    const maxX = Math.max(...visiblePoints.map(p => getLandmarkValue(p, 0)))
+    const minY = Math.min(...visiblePoints.map(p => getLandmarkValue(p, 1)))
+    const maxY = Math.max(...visiblePoints.map(p => getLandmarkValue(p, 1)))
 
     const rangeX = maxX - minX
     const rangeY = maxY - minY
@@ -130,11 +135,11 @@ export default function SkeletonVisualizer({
     const offsetY = (canvas.height - (rangeY * scale)) / 2 - (minY * scale)
 
     // Transform function
-    const transformPoint = (point: any) => {
+    const transformPoint = (point: PoseLandmark) => {
       return {
-        x: point[0] * scale + offsetX,
-        y: point[1] * scale + offsetY,
-        visibility: point[3]
+        x: getLandmarkValue(point, 0) * scale + offsetX,
+        y: getLandmarkValue(point, 1) * scale + offsetY,
+        visibility: getLandmarkValue(point, 3)
       }
     }
 
@@ -149,7 +154,7 @@ export default function SkeletonVisualizer({
       const endPoint = frame[end]
 
       if (startPoint && endPoint &&
-          startPoint[3] > 0.3 && endPoint[3] > 0.3) {
+          getLandmarkValue(startPoint, 3) > 0.3 && getLandmarkValue(endPoint, 3) > 0.3) {
         const p1 = transformPoint(startPoint)
         const p2 = transformPoint(endPoint)
 
@@ -178,7 +183,7 @@ export default function SkeletonVisualizer({
       const endPoint = frame[end]
 
       if (startPoint && endPoint &&
-          startPoint[3] > 0.1 && endPoint[3] > 0.1) {
+          getLandmarkValue(startPoint, 3) > 0.1 && getLandmarkValue(endPoint, 3) > 0.1) {
         const p1 = transformPoint(startPoint)
         const p2 = transformPoint(endPoint)
 
@@ -196,7 +201,7 @@ export default function SkeletonVisualizer({
       const endPoint = frame[end]
 
       if (startPoint && endPoint &&
-          startPoint[3] > 0.1 && endPoint[3] > 0.1) {
+          getLandmarkValue(startPoint, 3) > 0.1 && getLandmarkValue(endPoint, 3) > 0.1) {
         const p1 = transformPoint(startPoint)
         const p2 = transformPoint(endPoint)
 
@@ -212,7 +217,7 @@ export default function SkeletonVisualizer({
 
     // Draw landmarks
     frame.forEach((landmark, index) => {
-      if (landmark && landmark[3] > 0.1) {  // Lower threshold to show more hand points
+      if (landmark && getLandmarkValue(landmark, 3) > 0.1) {  // Lower threshold to show more hand points
         const p = transformPoint(landmark)
 
         // Color code landmarks

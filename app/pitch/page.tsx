@@ -596,17 +596,17 @@ function SlideContent({ slide }: { slide: typeof slides[0] }) {
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2 sm:gap-3 md:gap-4">
             <div className="bg-white/10 backdrop-blur-sm rounded-2xl p-2 sm:p-3 md:p-4">
-              <h3 className="text-lg sm:text-xl font-bold mb-1.5 sm:mb-2">{slide.comparison?.traditional.title}</h3>
+              <h3 className="text-lg sm:text-xl font-bold mb-1.5 sm:mb-2">{(slide.comparison as { traditional: { title: string; items: string[] }; signforge: { title: string; items: string[] } })?.traditional.title}</h3>
               <ul className="space-y-1.5 sm:space-y-2">
-                {slide.comparison?.traditional.items.map((item: string, i: number) => (
+                {(slide.comparison as { traditional: { title: string; items: string[] }; signforge: { title: string; items: string[] } })?.traditional.items.map((item: string, i: number) => (
                   <li key={i} className="text-xs sm:text-sm opacity-80">• {item}</li>
                 ))}
               </ul>
             </div>
             <div className="bg-white/10 backdrop-blur-sm rounded-2xl p-2 sm:p-3 md:p-4">
-              <h3 className="text-lg sm:text-xl font-bold mb-1.5 sm:mb-2">{slide.comparison?.signforge.title}</h3>
+              <h3 className="text-lg sm:text-xl font-bold mb-1.5 sm:mb-2">{(slide.comparison as { traditional: { title: string; items: string[] }; signforge: { title: string; items: string[] } })?.signforge.title}</h3>
               <ul className="space-y-1.5 sm:space-y-2">
-                {slide.comparison?.signforge.items.map((item: string, i: number) => (
+                {(slide.comparison as { traditional: { title: string; items: string[] }; signforge: { title: string; items: string[] } })?.signforge.items.map((item: string, i: number) => (
                   <li key={i} className="text-xs sm:text-sm opacity-80">✓ {item}</li>
                 ))}
               </ul>
@@ -759,7 +759,7 @@ function SlideContent({ slide }: { slide: typeof slides[0] }) {
         <div className="space-y-2 sm:space-y-3 md:space-y-4 animate-fade-in px-2 w-full max-h-full overflow-y-auto">
           <h2 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-center px-2">{slide.title}</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2 sm:gap-3 md:gap-4 mb-2 sm:mb-3">
-            {slide.comparison?.map((state: any, index: number) => (
+            {(slide.comparison as any[])?.map((state: any, index: number) => (
               <div key={index} className="bg-white/10 backdrop-blur-sm rounded-2xl p-2 sm:p-3 md:p-4">
                 <h3 className="text-xl sm:text-2xl font-bold mb-2 sm:mb-3 text-center">{state.title}</h3>
                 <div className="space-y-1.5 sm:space-y-2">

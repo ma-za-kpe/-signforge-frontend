@@ -48,7 +48,7 @@ export function UserButton() {
           </div>
         )}
         <span className="text-white font-medium hidden sm:block">
-          {session.user.username || session.user.name?.split(" ")[0] || "User"}
+          {(session.user as any).username || session.user.name?.split(" ")[0] || "User"}
         </span>
       </button>
 
@@ -65,11 +65,11 @@ export function UserButton() {
                 {session.user.name}
               </p>
               <p className="text-sm text-gray-500">
-                @{session.user.username || "no-username"}
+                @{(session.user as any).username || "no-username"}
               </p>
-              {session.user.reputation !== undefined && (
+              {(session.user as any).reputation !== undefined && (
                 <p className="text-xs text-[#00549F] mt-1">
-                  {session.user.reputation} reputation
+                  {(session.user as any).reputation} reputation
                 </p>
               )}
             </div>

@@ -252,6 +252,20 @@ export default function FeedPage() {
               </a>
             </div>
 
+            {/* Leaderboard Card */}
+            <a
+              href="/leaderboard"
+              className="block bg-gradient-to-br from-yellow-400 to-orange-500 rounded-lg p-4 text-white hover:shadow-lg transition-shadow"
+            >
+              <div className="flex items-center gap-3 mb-2">
+                <span className="text-2xl">🏆</span>
+                <h4 className="font-bold text-lg">Leaderboard</h4>
+              </div>
+              <p className="text-sm text-yellow-100">
+                See top contributors and earn reputation
+              </p>
+            </a>
+
             {/* Info Card */}
             <div className="bg-white rounded-lg p-4 border border-gray-200">
               <h4 className="font-semibold text-gray-800 mb-3">How Voting Works</h4>

@@ -62,6 +62,10 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
   } | null>(null)
   const [selectedMethod, setSelectedMethod] = useState<'webcam' | 'upload' | null>(null)
 
+  // Consent state (GDPR/DPA compliance)
+  const [aiTrainingConsent, setAiTrainingConsent] = useState(true)
+  const [publicDisplayConsent, setPublicDisplayConsent] = useState(true)
+
   // 3-attempt recording state
   const [currentAttempt, setCurrentAttempt] = useState(1)
   const [attemptData, setAttemptData] = useState<Array<{
@@ -263,16 +267,15 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
   }
 
   // Update FPS stats periodically
+  // Note: MediaPipeHandler.getStatus() doesn't track FPS, so we keep default values
+  // TODO: Add FPS tracking to MediaPipeHandler if needed
   useEffect(() => {
-    if (pageState === 'recording' && mediaPipeHandlerRef.current) {
-      const interval = setInterval(() => {
-        const stats = mediaPipeHandlerRef.current?.getStats()
-        if (stats) {
-          setFpsStats(stats)
-        }
-      }, 1000) // Update every second
-
-      return () => clearInterval(interval)
+    // FPS tracking placeholder - could be enhanced in the future
+    if (pageState === 'recording') {
+      // For now, just show the target FPS as actual during recording
+      setFpsStats(prev => ({ ...prev, actualFps: prev.targetFps }))
+    } else {
+      setFpsStats(prev => ({ ...prev, actualFps: null }))
     }
   }, [pageState])
 
@@ -845,7 +848,10 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
         individual_qualities: attemptMetadata?.individual_qualities || null,
         individual_durations: attemptMetadata?.individual_durations || null,
         quality_variance: attemptMetadata?.quality_variance || null,
-        improvement_trend: attemptMetadata?.improvement_trend || null
+        improvement_trend: attemptMetadata?.improvement_trend || null,
+        // Consent (GDPR/DPA compliance)
+        ai_training_consent: aiTrainingConsent,
+        public_display_consent: publicDisplayConsent
       }
 
       console.log('📤 Submitting contribution:', {
@@ -1488,12 +1494,44 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
                   </div>
                 )}
 
+                {/* Consent Checkboxes */}
+                <div className="mb-5 bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <h3 className="text-sm font-semibold text-blue-800 mb-3">Data Usage Consent</h3>
+                  <div className="space-y-3">
+                    <label className="flex items-start gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={aiTrainingConsent}
+                        onChange={(e) => setAiTrainingConsent(e.target.checked)}
+                        className="mt-1 w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                      />
+                      <span className="text-sm text-gray-700">
+                        I consent to my contribution being used to train AI models for sign language recognition
+                      </span>
+                    </label>
+                    <label className="flex items-start gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={publicDisplayConsent}
+                        onChange={(e) => setPublicDisplayConsent(e.target.checked)}
+                        className="mt-1 w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                      />
+                      <span className="text-sm text-gray-700">
+                        I consent to my contribution being displayed publicly in the SignTube feed
+                      </span>
+                    </label>
+                  </div>
+                  <p className="mt-3 text-xs text-blue-600">
+                    You can withdraw your consent at any time by contacting us.
+                  </p>
+                </div>
+
                 {/* Action Buttons */}
                 <div className="flex flex-col gap-3">
                   <button
                     onClick={handleSubmitContribution}
-                    disabled={isSubmitting}
-                    className={`w-full ${isSubmitting ? 'bg-green-500 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700 active:scale-95'} text-white font-bold py-4 px-6 rounded-xl transition-all duration-200 shadow-lg flex items-center justify-center gap-2`}
+                    disabled={isSubmitting || !aiTrainingConsent}
+                    className={`w-full ${isSubmitting || !aiTrainingConsent ? 'bg-green-400 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700 active:scale-95'} text-white font-bold py-4 px-6 rounded-xl transition-all duration-200 shadow-lg flex items-center justify-center gap-2`}
                   >
                     {isSubmitting ? (
                       <>

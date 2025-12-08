@@ -174,3 +174,166 @@ export async function getCorrectionStats(): Promise<CorrectionStats> {
 
   return response.json();
 }
+
+// ============================================
+// ADMIN API - Requires X-Admin-User-Id header
+// ============================================
+
+/**
+ * Make an authenticated admin API request
+ * Automatically adds X-Admin-User-Id header from user email
+ *
+ * @param endpoint - API endpoint (e.g., '/api/admin/contributions')
+ * @param userEmail - Admin user's email address
+ * @param options - Fetch options (method, body, etc.)
+ */
+export async function adminFetch(
+  endpoint: string,
+  userEmail: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const headers = new Headers(options.headers);
+  headers.set('X-Admin-User-Id', userEmail);
+  headers.set('Content-Type', 'application/json');
+
+  return fetch(`${API_BASE_URL}${endpoint}`, {
+    ...options,
+    headers,
+  });
+}
+
+/**
+ * Admin API helper - GET request
+ */
+export async function adminGet<T>(endpoint: string, userEmail: string): Promise<T> {
+  const response = await adminFetch(endpoint, userEmail, { method: 'GET' });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Request failed' }));
+    throw new Error(error.detail || 'Admin request failed');
+  }
+
+  return response.json();
+}
+
+/**
+ * Admin API helper - POST request
+ */
+export async function adminPost<T>(endpoint: string, userEmail: string, body: unknown): Promise<T> {
+  const response = await adminFetch(endpoint, userEmail, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Request failed' }));
+    throw new Error(error.detail || 'Admin request failed');
+  }
+
+  return response.json();
+}
+
+/**
+ * Admin API helper - PATCH request
+ */
+export async function adminPatch<T>(endpoint: string, userEmail: string, body: unknown): Promise<T> {
+  const response = await adminFetch(endpoint, userEmail, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Request failed' }));
+    throw new Error(error.detail || 'Admin request failed');
+  }
+
+  return response.json();
+}
+
+/**
+ * Admin API helper - DELETE request
+ */
+export async function adminDelete<T>(endpoint: string, userEmail: string): Promise<T> {
+  const response = await adminFetch(endpoint, userEmail, { method: 'DELETE' });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Request failed' }));
+    throw new Error(error.detail || 'Admin request failed');
+  }
+
+  return response.json();
+}
+
+// ============================================
+// ADMIN API TYPES
+// ============================================
+
+export interface AdminOverview {
+  total_contributions: number;
+  total_words: number;
+  total_users: number;
+  pending_review: number;
+  recent_contributions: Array<{
+    id: number;
+    word: string;
+    user_id: string;
+    quality_score: number;
+    created_at: string;
+  }>;
+}
+
+export interface AdminContribution {
+  id: number;
+  contribution_id: string;
+  word: string;
+  user_id: string;
+  quality_score: number;
+  is_hidden: boolean;
+  flag_count: number;
+  created_at: string;
+}
+
+// ============================================
+// ADMIN API FUNCTIONS
+// ============================================
+
+/**
+ * Get admin dashboard overview
+ */
+export async function getAdminOverview(userEmail: string): Promise<AdminOverview> {
+  return adminGet('/api/admin/ama/overview', userEmail);
+}
+
+/**
+ * Get all contributions (admin)
+ */
+export async function getAdminContributions(
+  userEmail: string,
+  params?: { page?: number; limit?: number; status?: string }
+): Promise<{ contributions: AdminContribution[]; total: number }> {
+  const searchParams = new URLSearchParams();
+  if (params?.page) searchParams.set('page', params.page.toString());
+  if (params?.limit) searchParams.set('limit', params.limit.toString());
+  if (params?.status) searchParams.set('status', params.status);
+
+  const query = searchParams.toString() ? `?${searchParams.toString()}` : '';
+  return adminGet(`/api/admin/ama/contributions${query}`, userEmail);
+}
+
+/**
+ * Delete a contribution (admin)
+ */
+export async function deleteContribution(userEmail: string, contributionId: number): Promise<void> {
+  await adminDelete(`/api/admin/ama/contributions/${contributionId}`, userEmail);
+}
+
+/**
+ * Hide a contribution (admin)
+ */
+export async function hideContribution(
+  userEmail: string,
+  contributionId: number,
+  reason: string
+): Promise<void> {
+  await adminPatch(`/api/admin/ama/contributions/${contributionId}/hide`, userEmail, { reason });
+}

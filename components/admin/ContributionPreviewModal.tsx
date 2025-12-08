@@ -5,10 +5,44 @@
  * Allows admin to preview, edit, or delete contributions
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { X, Trash2, Edit2, Save, Loader2, AlertCircle, CheckCircle } from 'lucide-react';
 import SkeletonPreview from '../contribution/SkeletonPreview';
 import toast from 'react-hot-toast';
+
+// Transform raw pose sequence to Frame format expected by SkeletonPreview
+const transformPoseSequence = (poseSequence: number[][][]) => {
+  return poseSequence.map((frame, idx) => {
+    // Each frame has 75 landmarks: 33 pose + 21 left hand + 21 right hand
+    const poseLandmarks = frame.slice(0, 33).map(lm => ({
+      x: lm[0] ?? 0,
+      y: lm[1] ?? 0,
+      z: lm[2] ?? 0,
+      visibility: lm[3] ?? 1.0
+    }));
+    const leftHandLandmarks = frame.slice(33, 54).map(lm => ({
+      x: lm[0] ?? 0,
+      y: lm[1] ?? 0,
+      z: lm[2] ?? 0,
+      visibility: lm[3] ?? 1.0
+    }));
+    const rightHandLandmarks = frame.slice(54, 75).map(lm => ({
+      x: lm[0] ?? 0,
+      y: lm[1] ?? 0,
+      z: lm[2] ?? 0,
+      visibility: lm[3] ?? 1.0
+    }));
+
+    return {
+      frame_number: idx,
+      timestamp: idx / 30, // Assuming 30 fps
+      pose_landmarks: poseLandmarks,
+      left_hand_landmarks: leftHandLandmarks.length === 21 ? leftHandLandmarks : null,
+      right_hand_landmarks: rightHandLandmarks.length === 21 ? rightHandLandmarks : null,
+      face_landmarks: null
+    };
+  });
+};
 
 interface ContributionPreviewModalProps {
   contributionId: number;
@@ -243,7 +277,7 @@ export default function ContributionPreviewModal({
             <div className="flex flex-col gap-4">
               <h3 className="text-xl font-semibold text-gray-900">Pose Visualization</h3>
               <SkeletonPreview
-                frames={contribution.pose_sequence}
+                frames={transformPoseSequence(contribution.pose_sequence)}
                 isPlaying={false}
               />
             </div>

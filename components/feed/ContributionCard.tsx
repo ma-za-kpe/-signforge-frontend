@@ -4,7 +4,7 @@
  * ContributionCard Component
  * Displays a single contribution in the feed with voting, video, and metadata
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { formatDistanceToNow } from 'date-fns';
 import { ThumbsUp, ThumbsDown, MessageCircle, Flag, Share2, Award } from 'lucide-react';
 import { useAuthGate } from '@/components/auth/useAuthGate';
@@ -74,9 +74,40 @@ export function ContributionCard({ item }: Props) {
   const [isVoting, setIsVoting] = useState(false);
   const [showVideo, setShowVideo] = useState(false);
   const [showFlagConfirm, setShowFlagConfirm] = useState(false);
+  const [voteLoaded, setVoteLoaded] = useState(false);
 
   // Auth gate for voting and flagging
-  const { requireAuth, AuthModal } = useAuthGate();
+  const { requireAuth, AuthModal, user, isAuthenticated } = useAuthGate();
+
+  // Get user ID for voting - use email as unique identifier
+  const userId = user?.email || user?.id || null;
+
+  // Load existing user vote on mount
+  useEffect(() => {
+    if (!userId || voteLoaded) return;
+
+    const loadUserVote = async () => {
+      try {
+        const res = await fetch(
+          `${API_URL}/api/votes/${item.contribution_id}?user_id=${encodeURIComponent(userId)}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (data.vote_type === 1) {
+            setUserVote('up');
+          } else if (data.vote_type === -1) {
+            setUserVote('down');
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load user vote:', err);
+      } finally {
+        setVoteLoaded(true);
+      }
+    };
+
+    loadUserVote();
+  }, [userId, item.contribution_id, voteLoaded]);
 
   const netVotes = upvotes - downvotes;
   const timeAgo = formatDistanceToNow(new Date(item.created_at), { addSuffix: true });
@@ -85,7 +116,7 @@ export function ContributionCard({ item }: Props) {
     // Auth gate - require login to vote
     if (!requireAuth('vote on contributions')) return;
 
-    if (isVoting) return;
+    if (isVoting || !userId) return;
     setIsVoting(true);
 
     // Optimistic update
@@ -93,7 +124,9 @@ export function ContributionCard({ item }: Props) {
     const previousUpvotes = upvotes;
     const previousDownvotes = downvotes;
 
-    if (userVote === voteType) {
+    const isUndo = userVote === voteType;
+
+    if (isUndo) {
       // Undo vote
       setUserVote(null);
       if (voteType === 'up') setUpvotes(u => u - 1);
@@ -108,12 +141,26 @@ export function ContributionCard({ item }: Props) {
     }
 
     try {
-      // TODO: Implement voting API
-      // await fetch(`${API_URL}/api/contributions/${item.contribution_id}/vote`, {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({ vote_type: voteType === userVote ? null : voteType })
-      // });
+      if (isUndo) {
+        // Remove vote
+        const res = await fetch(
+          `${API_URL}/api/votes/${item.contribution_id}?user_id=${encodeURIComponent(userId)}`,
+          { method: 'DELETE' }
+        );
+        if (!res.ok) throw new Error('Failed to remove vote');
+      } else {
+        // Create or update vote
+        const res = await fetch(`${API_URL}/api/votes`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contribution_id: item.contribution_id,
+            vote_type: voteType === 'up' ? 1 : -1,
+            user_id: userId
+          })
+        });
+        if (!res.ok) throw new Error('Failed to vote');
+      }
     } catch (error) {
       // Revert on error
       setUserVote(previousVote);
@@ -156,33 +203,42 @@ export function ContributionCard({ item }: Props) {
   };
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden hover:shadow-md transition-shadow">
+    <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-md transition-all">
       {/* Header */}
-      <div className="p-4 pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
+      <div className="p-3 sm:p-4 pb-2">
+        <div className="flex items-start sm:items-center justify-between gap-2">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             {/* User Avatar */}
-            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#00549F] to-[#00A2E5] flex items-center justify-center text-white font-bold">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-gradient-to-br from-[#00549F] to-[#00A2E5] flex items-center justify-center text-white font-bold text-sm sm:text-base flex-shrink-0">
               {item.user_id?.[0]?.toUpperCase() || '?'}
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-medium text-gray-900">
-                  {item.user_id || 'Anonymous'}
-                </span>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-1 sm:gap-2">
+                {item.user_id ? (
+                  <a
+                    href={`/u/${encodeURIComponent(item.user_id)}`}
+                    className="font-medium text-gray-900 hover:text-[#00549F] text-sm sm:text-base truncate transition-colors"
+                  >
+                    {item.user_id}
+                  </a>
+                ) : (
+                  <span className="font-medium text-gray-900 text-sm sm:text-base truncate">
+                    Anonymous
+                  </span>
+                )}
                 {item.is_gold_standard && (
-                  <span className="flex items-center gap-1 px-2 py-0.5 bg-yellow-100 text-yellow-700 text-xs font-medium rounded-full">
-                    <Award className="w-3 h-3" />
+                  <span className="flex items-center gap-0.5 sm:gap-1 px-1.5 sm:px-2 py-0.5 bg-yellow-100 text-yellow-700 text-[10px] sm:text-xs font-medium rounded-full">
+                    <Award className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
                     Gold
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-2 text-sm text-gray-500">
+              <div className="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm text-gray-500">
                 <span>{timeAgo}</span>
                 {item.user_region && (
                   <>
-                    <span>•</span>
-                    <span>{item.user_region}</span>
+                    <span className="hidden xs:inline">•</span>
+                    <span className="hidden xs:inline">{item.user_region}</span>
                   </>
                 )}
               </div>
@@ -190,15 +246,15 @@ export function ContributionCard({ item }: Props) {
           </div>
 
           {/* Quality Score Badge */}
-          <div className="flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-700 rounded-lg text-sm font-medium">
+          <div className="flex items-center gap-0.5 sm:gap-1 px-1.5 sm:px-2 py-0.5 sm:py-1 bg-blue-50 text-blue-700 rounded-lg text-xs sm:text-sm font-medium flex-shrink-0">
             <span>{Math.round(item.quality_score)}%</span>
-            <span className="text-xs text-blue-500">quality</span>
+            <span className="hidden sm:inline text-[10px] sm:text-xs text-blue-500">quality</span>
           </div>
         </div>
 
         {/* Word Label */}
-        <div className="mt-3">
-          <span className="inline-block px-3 py-1.5 bg-[#00549F] text-white font-bold rounded-lg text-lg">
+        <div className="mt-2 sm:mt-3">
+          <span className="inline-block px-2.5 sm:px-3 py-1 sm:py-1.5 bg-[#00549F] text-white font-bold rounded-lg text-base sm:text-lg">
             {item.word}
           </span>
         </div>
@@ -263,68 +319,70 @@ export function ContributionCard({ item }: Props) {
       </div>
 
       {/* Actions */}
-      <div className="p-3 flex items-center justify-between border-t border-gray-100">
-        <div className="flex items-center gap-1">
+      <div className="p-2 sm:p-3 flex items-center justify-between border-t border-gray-100">
+        <div className="flex items-center gap-0.5 sm:gap-1">
           {/* Upvote */}
           <button
             onClick={() => handleVote('up')}
             disabled={isVoting}
-            className={`flex items-center gap-1 px-3 py-1.5 rounded-lg transition-colors ${
+            className={`flex items-center gap-0.5 sm:gap-1 px-2 sm:px-3 py-1.5 rounded-lg transition-colors ${
               userVote === 'up'
                 ? 'bg-green-100 text-green-600'
                 : 'hover:bg-gray-100 text-gray-600'
             }`}
           >
-            <ThumbsUp className={`w-5 h-5 ${userVote === 'up' ? 'fill-current' : ''}`} />
-            <span className="font-medium">{upvotes}</span>
+            <ThumbsUp className={`w-4 h-4 sm:w-5 sm:h-5 ${userVote === 'up' ? 'fill-current' : ''}`} />
+            <span className="font-medium text-sm sm:text-base">{upvotes}</span>
           </button>
 
           {/* Downvote */}
           <button
             onClick={() => handleVote('down')}
             disabled={isVoting}
-            className={`flex items-center gap-1 px-3 py-1.5 rounded-lg transition-colors ${
+            className={`flex items-center gap-0.5 sm:gap-1 px-2 sm:px-3 py-1.5 rounded-lg transition-colors ${
               userVote === 'down'
                 ? 'bg-red-100 text-red-600'
                 : 'hover:bg-gray-100 text-gray-600'
             }`}
           >
-            <ThumbsDown className={`w-5 h-5 ${userVote === 'down' ? 'fill-current' : ''}`} />
-            <span className="font-medium">{downvotes}</span>
+            <ThumbsDown className={`w-4 h-4 sm:w-5 sm:h-5 ${userVote === 'down' ? 'fill-current' : ''}`} />
+            <span className="font-medium text-sm sm:text-base">{downvotes}</span>
           </button>
 
           {/* Net score */}
-          <div className={`px-2 py-1 text-sm font-bold ${
+          <div className={`px-1.5 sm:px-2 py-1 text-xs sm:text-sm font-bold ${
             netVotes > 0 ? 'text-green-600' : netVotes < 0 ? 'text-red-600' : 'text-gray-400'
           }`}>
             {netVotes > 0 ? '+' : ''}{netVotes}
           </div>
         </div>
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5 sm:gap-1">
           {/* Comments */}
           <button
             onClick={handleComment}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-lg hover:bg-gray-100 text-gray-600 transition-colors"
+            className="flex items-center gap-0.5 sm:gap-1 px-2 sm:px-3 py-1.5 rounded-lg hover:bg-gray-100 text-gray-600 transition-colors"
           >
-            <MessageCircle className="w-5 h-5" />
-            <span className="font-medium">{item.comment_count}</span>
+            <MessageCircle className="w-4 h-4 sm:w-5 sm:h-5" />
+            <span className="font-medium text-sm sm:text-base">{item.comment_count}</span>
           </button>
 
           {/* Share */}
           <button
             onClick={handleShare}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-lg hover:bg-gray-100 text-gray-600 transition-colors"
+            className="flex items-center justify-center w-8 h-8 sm:w-auto sm:h-auto sm:px-3 sm:py-1.5 rounded-lg hover:bg-gray-100 text-gray-600 transition-colors"
+            title="Share"
           >
-            <Share2 className="w-5 h-5" />
+            <Share2 className="w-4 h-4 sm:w-5 sm:h-5" />
           </button>
 
           {/* Flag */}
           <button
             onClick={handleFlag}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
+            className="flex items-center justify-center w-8 h-8 sm:w-auto sm:h-auto sm:px-3 sm:py-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
+            title="Report"
           >
-            <Flag className="w-5 h-5" />
+            <Flag className="w-4 h-4 sm:w-5 sm:h-5" />
           </button>
         </div>
       </div>

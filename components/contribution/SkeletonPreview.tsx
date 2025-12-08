@@ -22,12 +22,14 @@ interface SkeletonPreviewProps {
   frames: Frame[]
   isPlaying?: boolean
   onPlaybackComplete?: () => void
+  frameRate?: number
+  showControls?: boolean
 }
 
-export default function SkeletonPreview({ frames, isPlaying = false, onPlaybackComplete }: SkeletonPreviewProps) {
+export default function SkeletonPreview({ frames, isPlaying = false, onPlaybackComplete, frameRate = 30, showControls = false }: SkeletonPreviewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [currentFrame, setCurrentFrame] = useState(0)
-  const animationFrameRef = useRef<number>()
+  const animationFrameRef = useRef<number | undefined>(undefined)
   const startTimeRef = useRef<number>(0)
 
   useEffect(() => {
@@ -40,7 +42,7 @@ export default function SkeletonPreview({ frames, isPlaying = false, onPlaybackC
 
     const animate = () => {
       const elapsed = (Date.now() - startTimeRef.current) / 1000
-      const frameIndex = Math.floor(elapsed * 30) // Assuming 30fps
+      const frameIndex = Math.floor(elapsed * frameRate)
 
       if (frameIndex >= frames.length) {
         setCurrentFrame(frames.length - 1)
@@ -59,7 +61,7 @@ export default function SkeletonPreview({ frames, isPlaying = false, onPlaybackC
         cancelAnimationFrame(animationFrameRef.current)
       }
     }
-  }, [isPlaying, frames, onPlaybackComplete])
+  }, [isPlaying, frames, onPlaybackComplete, frameRate])
 
   useEffect(() => {
     const canvas = canvasRef.current
