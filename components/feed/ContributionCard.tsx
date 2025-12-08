@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { formatDistanceToNow } from 'date-fns';
 import { ThumbsUp, ThumbsDown, MessageCircle, Flag, Share2, Award } from 'lucide-react';
 import { useAuthGate } from '@/components/auth/useAuthGate';
+import SkeletonVisualizer from '@/components/SkeletonVisualizer';
 
 interface ContributionItem {
   id: number;
@@ -23,6 +24,7 @@ interface ContributionItem {
   thumbnail_url: string | null;
   created_at: string;
   user_region: string | null;
+  frames_data?: number[][] | null;  // Skeleton pose data for fallback display
 }
 
 interface Props {
@@ -30,6 +32,40 @@ interface Props {
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:9000';
+
+// Transform API frames_data to SkeletonVisualizer format
+// API format: [{frame_number, pose_landmarks: [{x,y,z,visibility}...], left_hand_landmarks, right_hand_landmarks}]
+// Skeleton format: [[x,y,z,visibility]...] per frame (75 landmarks: 33 pose + 21 left + 21 right)
+function transformFramesData(framesData: any[]): number[][][] {
+  if (!framesData || !Array.isArray(framesData)) return [];
+
+  return framesData.map(frame => {
+    const landmarks: number[][] = [];
+
+    // Add pose landmarks (33 points)
+    if (frame.pose_landmarks && Array.isArray(frame.pose_landmarks)) {
+      frame.pose_landmarks.forEach((p: any) => {
+        landmarks.push([p.x || 0, p.y || 0, p.z || 0, p.visibility ?? 0.9]);
+      });
+    }
+
+    // Add left hand landmarks (21 points)
+    if (frame.left_hand_landmarks && Array.isArray(frame.left_hand_landmarks)) {
+      frame.left_hand_landmarks.forEach((p: any) => {
+        landmarks.push([p.x || 0, p.y || 0, p.z || 0, p.visibility ?? 0.9]);
+      });
+    }
+
+    // Add right hand landmarks (21 points)
+    if (frame.right_hand_landmarks && Array.isArray(frame.right_hand_landmarks)) {
+      frame.right_hand_landmarks.forEach((p: any) => {
+        landmarks.push([p.x || 0, p.y || 0, p.z || 0, p.visibility ?? 0.9]);
+      });
+    }
+
+    return landmarks;
+  });
+}
 
 export function ContributionCard({ item }: Props) {
   const [upvotes, setUpvotes] = useState(item.upvotes);
@@ -208,6 +244,17 @@ export function ContributionCard({ item }: Props) {
               </div>
             </button>
           )
+        ) : item.frames_data && item.frames_data.length > 0 ? (
+          /* Show skeleton animation when no video but has pose data */
+          <div className="w-full aspect-video">
+            <SkeletonVisualizer
+              poseData={transformFramesData(item.frames_data)}
+              playing={true}
+              fps={15}
+              word={item.word}
+              className="w-full h-full"
+            />
+          </div>
         ) : (
           <div className="w-full aspect-video flex items-center justify-center bg-gray-200">
             <span className="text-gray-400">No video</span>

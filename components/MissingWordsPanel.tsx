@@ -70,7 +70,7 @@ export default function MissingWordsPanel() {
     try {
       // Create comprehensive markdown report
       const reportContent = `# Missing Words Report
-**Ghana Sign Language Dictionary - SignForge Hackathon 2025**
+**Ghana Sign Language Dictionary - SignForge 2025**
 
 Generated: ${new Date().toLocaleString()}
 

@@ -1,0 +1,418 @@
+/**
+ * Video Upload Component
+ *
+ * Handles file upload with drag & drop support, client-side validation,
+ * and server-side processing for sign language video contributions.
+ */
+
+import React, { useState, useRef, useCallback } from 'react';
+import { Upload, X, CheckCircle, AlertCircle, Loader2, Video, FileVideo } from 'lucide-react';
+import {
+  VIDEO_VALIDATION_RULES,
+  validateVideoFile,
+  formatFileSize,
+  formatDuration,
+  getQualityLabel,
+  getQualityColor,
+  type VideoValidationResult
+} from '@/lib/videoValidationRules';
+
+interface VideoUploaderProps {
+  word: string;
+  userId: string;
+  signClassification?: {
+    sign_type_movement: 'static' | 'dynamic';
+    sign_type_hands: 'one-handed' | 'two-handed';
+  };
+  onUploadComplete: (result: UploadResult) => void;
+  onCancel?: () => void;
+}
+
+interface UploadResult {
+  pose_sequence: number[][][];
+  fps: number;
+  total_frames: number;
+  extracted_frames: number;
+  duration: number;
+  quality_breakdown: {
+    overall_score: number;
+    hand_visibility: number;
+    motion_smoothness: number;
+    frame_completeness: number;
+    lighting_quality: number;
+  };
+  quality_label: string;
+  message: string;
+}
+
+type UploadState = 'idle' | 'validating' | 'uploading' | 'processing' | 'success' | 'error';
+
+export default function VideoUploader({
+  word,
+  userId,
+  signClassification,
+  onUploadComplete,
+  onCancel
+}: VideoUploaderProps) {
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [validationResult, setValidationResult] = useState<VideoValidationResult | null>(null);
+  const [uploadState, setUploadState] = useState<UploadState>('idle');
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [errorMessage, setErrorMessage] = useState<string>('');
+  const [isDragging, setIsDragging] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string>('');
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Handle file selection
+  const handleFileSelect = useCallback(async (file: File) => {
+    setUploadState('validating');
+    setSelectedFile(file);
+    setErrorMessage('');
+
+    // Create preview URL
+    const url = URL.createObjectURL(file);
+    setPreviewUrl(url);
+
+    // Validate file
+    const validation = await validateVideoFile(file);
+    setValidationResult(validation);
+
+    if (validation.isValid) {
+      setUploadState('idle');
+    } else {
+      setUploadState('error');
+      setErrorMessage(validation.errors[0].message);
+    }
+  }, []);
+
+  // Handle drag and drop
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) {
+      handleFileSelect(files[0]);
+    }
+  }, [handleFileSelect]);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback(() => {
+    setIsDragging(false);
+  }, []);
+
+  // Handle file input change
+  const handleFileInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      handleFileSelect(files[0]);
+    }
+  }, [handleFileSelect]);
+
+  // Upload video to backend
+  const handleUpload = async () => {
+    if (!selectedFile || !validationResult?.isValid) return;
+
+    setUploadState('uploading');
+    setUploadProgress(0);
+
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+    formData.append('word', word);
+    formData.append('user_id', userId);
+
+    // Only append classification if provided (backend will auto-detect if not)
+    if (signClassification) {
+      formData.append('sign_type_movement', signClassification.sign_type_movement);
+      formData.append('sign_type_hands', signClassification.sign_type_hands);
+    }
+
+    try {
+      const xhr = new XMLHttpRequest();
+
+      // Track upload progress
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          const progress = Math.round((e.loaded / e.total) * 50); // 0-50% for upload
+          setUploadProgress(progress);
+        }
+      });
+
+      // Handle response
+      xhr.addEventListener('load', () => {
+        if (xhr.status === 200) {
+          setUploadState('processing');
+          setUploadProgress(75); // 75% for processing
+
+          const result: UploadResult = JSON.parse(xhr.responseText);
+
+          setUploadProgress(100);
+          setUploadState('success');
+
+          setTimeout(() => {
+            onUploadComplete(result);
+          }, 500);
+        } else {
+          const error = JSON.parse(xhr.responseText);
+          setUploadState('error');
+          setErrorMessage(error.detail || 'Upload failed');
+        }
+      });
+
+      xhr.addEventListener('error', () => {
+        setUploadState('error');
+        setErrorMessage('Network error occurred during upload');
+      });
+
+      xhr.open('POST', '/api/contribute/upload');
+      xhr.send(formData);
+
+    } catch (error) {
+      setUploadState('error');
+      setErrorMessage(error instanceof Error ? error.message : 'Upload failed');
+    }
+  };
+
+  // Clear selection
+  const handleClear = () => {
+    setSelectedFile(null);
+    setValidationResult(null);
+    setUploadState('idle');
+    setErrorMessage('');
+    setUploadProgress(0);
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      setPreviewUrl('');
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  // Render upload zone
+  const renderUploadZone = () => (
+    <div
+      onDrop={handleDrop}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      className={`
+        border-2 border-dashed rounded-lg p-12 text-center transition-all
+        ${isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-blue-400'}
+      `}
+    >
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={VIDEO_VALIDATION_RULES.ALLOWED_EXTENSIONS.join(',')}
+        onChange={handleFileInputChange}
+        className="hidden"
+      />
+
+      <Upload className={`w-16 h-16 mx-auto mb-4 ${isDragging ? 'text-blue-500' : 'text-gray-400'}`} />
+
+      <h3 className="text-xl font-semibold text-gray-900 mb-2">
+        {isDragging ? 'Drop video here' : 'Upload Your Sign Language Video'}
+      </h3>
+
+      <p className="text-gray-600 mb-4">
+        Drag and drop your video file here, or click to browse
+      </p>
+
+      <button
+        onClick={() => fileInputRef.current?.click()}
+        className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+      >
+        Select Video File
+      </button>
+
+      <div className="mt-6 text-sm text-gray-500 space-y-1">
+        <p>Accepted formats: MP4, WebM, MOV</p>
+        <p>Duration: {VIDEO_VALIDATION_RULES.MIN_DURATION}-{VIDEO_VALIDATION_RULES.MAX_DURATION} seconds</p>
+        <p>Max size: {VIDEO_VALIDATION_RULES.MAX_FILE_SIZE / 1024 / 1024}MB</p>
+      </div>
+    </div>
+  );
+
+  // Render file preview
+  const renderFilePreview = () => {
+    if (!selectedFile || !validationResult) return null;
+
+    return (
+      <div className="bg-white rounded-lg border-2 border-gray-300 p-6">
+        <div className="flex items-start justify-between mb-4">
+          <div className="flex items-start gap-4 flex-1">
+            <FileVideo className="w-12 h-12 text-blue-600 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <h3 className="font-semibold text-gray-900 truncate">
+                {selectedFile.name}
+              </h3>
+              <div className="text-sm text-gray-600 space-y-1 mt-1">
+                <p>Size: {formatFileSize(selectedFile.size)}</p>
+                {validationResult.metadata?.duration && (
+                  <p>Duration: {formatDuration(validationResult.metadata.duration)}</p>
+                )}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={handleClear}
+            disabled={uploadState === 'uploading' || uploadState === 'processing'}
+            className="p-2 hover:bg-gray-100 rounded-full transition-colors disabled:opacity-50"
+          >
+            <X className="w-5 h-5 text-gray-500" />
+          </button>
+        </div>
+
+        {/* Video Preview */}
+        {previewUrl && (
+          <div className="mb-4">
+            <video
+              src={previewUrl}
+              controls
+              className="w-full max-h-64 rounded-lg bg-black"
+            />
+          </div>
+        )}
+
+        {/* Validation Messages */}
+        {validationResult.errors.length > 0 && (
+          <div className="mb-4 space-y-2">
+            {validationResult.errors.map((error, idx) => (
+              <div key={idx} className="flex items-start gap-2 text-sm text-red-600 bg-red-50 p-3 rounded">
+                <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                <span>{error.message}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {validationResult.warnings.length > 0 && (
+          <div className="mb-4 space-y-2">
+            {validationResult.warnings.map((warning, idx) => (
+              <div key={idx} className="flex items-start gap-2 text-sm text-yellow-600 bg-yellow-50 p-3 rounded">
+                <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                <span>{warning.message}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Upload Button */}
+        {validationResult.isValid && uploadState === 'idle' && (
+          <button
+            onClick={handleUpload}
+            className="w-full py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold"
+          >
+            Upload and Process Video
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  // Render upload progress
+  const renderProgress = () => {
+    if (uploadState !== 'uploading' && uploadState !== 'processing') return null;
+
+    return (
+      <div className="bg-white rounded-lg border-2 border-blue-500 p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
+          <div className="flex-1">
+            <h3 className="font-semibold text-gray-900">
+              {uploadState === 'uploading' ? 'Uploading video...' : 'Processing video...'}
+            </h3>
+            <p className="text-sm text-gray-600">
+              {uploadState === 'uploading'
+                ? 'Transferring your video to our server'
+                : 'Extracting pose data with MediaPipe (video will be deleted)'}
+            </p>
+          </div>
+        </div>
+
+        {/* Progress Bar */}
+        <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+          <div
+            className="bg-blue-600 h-full transition-all duration-300"
+            style={{ width: `${uploadProgress}%` }}
+          />
+        </div>
+        <p className="text-sm text-gray-600 mt-2 text-center">{uploadProgress}%</p>
+      </div>
+    );
+  };
+
+  // Render error
+  const renderError = () => {
+    if (uploadState !== 'error' || !errorMessage) return null;
+
+    return (
+      <div className="bg-red-50 border-2 border-red-200 rounded-lg p-6">
+        <div className="flex items-start gap-3">
+          <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0" />
+          <div className="flex-1">
+            <h3 className="font-semibold text-red-900 mb-1">Upload Failed</h3>
+            <p className="text-sm text-red-800">{errorMessage}</p>
+          </div>
+        </div>
+        <button
+          onClick={handleClear}
+          className="mt-4 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+        >
+          Try Again
+        </button>
+      </div>
+    );
+  };
+
+  return (
+    <div className="max-w-3xl mx-auto p-6">
+      {/* Header */}
+      <div className="text-center mb-8">
+        <h2 className="text-3xl font-bold text-gray-900 mb-2">
+          Upload Video: <span className="text-blue-600">{word}</span>
+        </h2>
+        <p className="text-gray-600">
+          Select a pre-recorded video from your device
+        </p>
+      </div>
+
+      {/* Main Content */}
+      {uploadState === 'idle' && !selectedFile && renderUploadZone()}
+      {(uploadState === 'idle' || uploadState === 'validating') && selectedFile && renderFilePreview()}
+      {(uploadState === 'uploading' || uploadState === 'processing') && renderProgress()}
+      {uploadState === 'error' && renderError()}
+
+      {/* Privacy Notice */}
+      <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+        <div className="flex items-start gap-3">
+          <CheckCircle className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
+          <div className="text-sm text-blue-900">
+            <p className="font-semibold mb-1">Privacy Guarantee</p>
+            <p>
+              Your video is processed server-side and <strong>immediately deleted</strong> after
+              extracting pose data. We never store your video files.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Cancel Button */}
+      {onCancel && uploadState === 'idle' && (
+        <div className="mt-6 text-center">
+          <button
+            onClick={onCancel}
+            className="text-gray-600 hover:text-gray-900 underline"
+          >
+            Choose Different Method
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}

@@ -1,0 +1,397 @@
+/**
+ * Webcam Recorder Component
+ *
+ * Records video from webcam using MediaRecorder API, then uploads to server
+ * for pose extraction (same flow as file upload).
+ *
+ * This replaces the old client-side MediaPipe processing with server-side processing.
+ */
+
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Camera, StopCircle, Video, AlertCircle, Loader2, CheckCircle } from 'lucide-react';
+import toast from 'react-hot-toast';
+
+interface WebcamRecorderProps {
+  word: string;
+  userId: string;
+  onUploadComplete: (result: UploadResult) => void;
+  onCancel?: () => void;
+}
+
+interface UploadResult {
+  pose_sequence: number[][][];
+  fps: number;
+  total_frames: number;
+  extracted_frames: number;
+  duration: number;
+  quality_breakdown: {
+    overall_score: number;
+    hand_visibility: number;
+    motion_smoothness: number;
+    frame_completeness: number;
+    lighting_quality: number;
+  };
+  quality_label: string;
+  message: string;
+}
+
+type RecordingState = 'setup' | 'countdown' | 'recording' | 'processing' | 'uploading';
+
+export default function WebcamRecorder({
+  word,
+  userId,
+  onUploadComplete,
+  onCancel
+}: WebcamRecorderProps) {
+  const [recordingState, setRecordingState] = useState<RecordingState>('setup');
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [error, setError] = useState<string>('');
+
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Initialize webcam
+  useEffect(() => {
+    const initWebcam = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            facingMode: 'user'
+          },
+          audio: false
+        });
+
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Failed to access camera';
+        setError(errorMessage);
+        toast.error(`Camera error: ${errorMessage}`, { duration: 7000 });
+      }
+    };
+
+    initWebcam();
+
+    // Cleanup
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Start countdown then recording
+  const startRecording = useCallback(() => {
+    setRecordingState('countdown');
+    setCountdown(3);
+
+    const countdownInterval = setInterval(() => {
+      setCountdown(prev => {
+        if (prev === null || prev <= 1) {
+          clearInterval(countdownInterval);
+          beginRecording();
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }, []);
+
+  // Begin actual recording
+  const beginRecording = useCallback(() => {
+    if (!streamRef.current) {
+      toast.error('Camera not ready');
+      return;
+    }
+
+    try {
+      // Create MediaRecorder with supported format
+      const options = { mimeType: 'video/webm;codecs=vp9' };
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        options.mimeType = 'video/webm';
+      }
+
+      const mediaRecorder = new MediaRecorder(streamRef.current, options);
+      mediaRecorderRef.current = mediaRecorder;
+      chunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        handleRecordingComplete();
+      };
+
+      mediaRecorder.start();
+      setRecordingState('recording');
+      setRecordingDuration(0);
+
+      // Update recording duration every 100ms
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingDuration(prev => prev + 0.1);
+      }, 100);
+
+      // Auto-stop after 10 seconds (max duration)
+      setTimeout(() => {
+        if (mediaRecorderRef.current?.state === 'recording') {
+          stopRecording();
+        }
+      }, 10000);
+
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to start recording';
+      setError(errorMessage);
+      toast.error(`Recording error: ${errorMessage}`);
+    }
+  }, []);
+
+  // Stop recording
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.stop();
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+      }
+    }
+  }, []);
+
+  // Handle recording complete - upload to server
+  const handleRecordingComplete = useCallback(async () => {
+    setRecordingState('processing');
+
+    // Create video blob from chunks
+    const videoBlob = new Blob(chunksRef.current, { type: 'video/webm' });
+
+    // Convert to File object
+    const videoFile = new File([videoBlob], `${word}_${Date.now()}.webm`, {
+      type: 'video/webm',
+      lastModified: Date.now()
+    });
+
+    // Upload to server
+    setRecordingState('uploading');
+    setUploadProgress(0);
+
+    const formData = new FormData();
+    formData.append('file', videoFile);
+    formData.append('word', word);
+    formData.append('user_id', userId);
+    // Don't send sign_type - let backend auto-detect
+
+    try {
+      const xhr = new XMLHttpRequest();
+
+      // Track upload progress
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          const progress = Math.round((e.loaded / e.total) * 50); // 0-50% for upload
+          setUploadProgress(progress);
+        }
+      });
+
+      // Handle response
+      xhr.addEventListener('load', () => {
+        if (xhr.status === 200) {
+          setUploadProgress(75); // Processing
+
+          try {
+            const result: UploadResult = JSON.parse(xhr.responseText);
+            setUploadProgress(100);
+            toast.success('Video processed successfully!');
+            setTimeout(() => {
+              onUploadComplete(result);
+            }, 500);
+          } catch (parseError) {
+            setError('Failed to parse server response');
+            toast.error('Server returned invalid response. Please try again.');
+            setRecordingState('setup');
+          }
+        } else {
+          try {
+            const error = JSON.parse(xhr.responseText);
+            setError(error.detail || 'Upload failed');
+            toast.error(error.detail || 'Upload failed');
+          } catch (parseError) {
+            setError(`Server error (${xhr.status})`);
+            toast.error(`Server error (${xhr.status}). Please try again.`);
+          }
+          setRecordingState('setup');
+        }
+      });
+
+      xhr.addEventListener('error', () => {
+        setError('Network error occurred during upload');
+        toast.error('Network error occurred during upload');
+        setRecordingState('setup');
+      });
+
+      xhr.open('POST', '/api/contribute/upload');
+      xhr.send(formData);
+
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Upload failed';
+      setError(errorMessage);
+      toast.error(errorMessage);
+      setRecordingState('setup');
+    }
+  }, [word, userId, onUploadComplete]);
+
+  // Render different states
+  const renderContent = () => {
+    if (error && recordingState === 'setup') {
+      return (
+        <div className="text-center p-6">
+          <AlertCircle className="w-16 h-16 text-red-600 mx-auto mb-4" />
+          <h3 className="text-xl font-semibold text-gray-900 mb-2">Camera Error</h3>
+          <p className="text-gray-600 mb-4">{error}</p>
+          {onCancel && (
+            <button
+              onClick={onCancel}
+              className="px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+            >
+              Try Different Method
+            </button>
+          )}
+        </div>
+      );
+    }
+
+    if (recordingState === 'uploading' || recordingState === 'processing') {
+      return (
+        <div className="text-center p-6">
+          <Loader2 className="w-16 h-16 text-indigo-600 mx-auto mb-4 animate-spin" />
+          <h3 className="text-xl font-semibold text-gray-900 mb-2">
+            {recordingState === 'uploading' ? 'Uploading video...' : 'Processing video...'}
+          </h3>
+          <p className="text-gray-600 mb-4">
+            {recordingState === 'uploading'
+              ? 'Sending to server for pose extraction'
+              : 'Extracting pose data with MediaPipe'}
+          </p>
+          <div className="w-full max-w-md mx-auto bg-gray-200 rounded-full h-3 overflow-hidden">
+            <div
+              className="bg-indigo-600 h-full transition-all duration-300"
+              style={{ width: `${uploadProgress}%` }}
+            />
+          </div>
+          <p className="text-sm text-gray-600 mt-2">{uploadProgress}%</p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="relative">
+        {/* Video Feed */}
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className="w-full rounded-lg bg-black"
+          style={{ transform: 'scaleX(-1)' }} // Mirror for natural view
+        />
+
+        {/* Countdown Overlay */}
+        {recordingState === 'countdown' && countdown !== null && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-lg">
+            <div className="text-9xl font-bold text-white animate-pulse">
+              {countdown}
+            </div>
+          </div>
+        )}
+
+        {/* Recording Indicator */}
+        {recordingState === 'recording' && (
+          <div className="absolute top-4 left-4 flex items-center gap-2 bg-red-600 text-white px-4 py-2 rounded-full">
+            <div className="w-3 h-3 bg-white rounded-full animate-pulse" />
+            <span className="font-semibold">REC {recordingDuration.toFixed(1)}s</span>
+          </div>
+        )}
+
+        {/* Controls */}
+        <div className="mt-6 flex flex-col items-center gap-4">
+          {recordingState === 'setup' && (
+            <>
+              <button
+                onClick={startRecording}
+                className="px-8 py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition-all duration-200 transform hover:scale-105 shadow-lg flex items-center gap-3"
+              >
+                <Camera className="w-6 h-6" />
+                <span>Start Recording</span>
+              </button>
+              <p className="text-sm text-gray-600 text-center">
+                Recording will start after a 3-second countdown<br />
+                Maximum duration: 10 seconds
+              </p>
+            </>
+          )}
+
+          {recordingState === 'recording' && (
+            <button
+              onClick={stopRecording}
+              className="px-8 py-4 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition-all duration-200 transform hover:scale-105 shadow-lg flex items-center gap-3"
+            >
+              <StopCircle className="w-6 h-6" />
+              <span>Stop Recording</span>
+            </button>
+          )}
+
+          {onCancel && recordingState === 'setup' && (
+            <button
+              onClick={onCancel}
+              className="text-gray-600 hover:text-gray-900 underline"
+            >
+              Choose Different Method
+            </button>
+          )}
+        </div>
+
+        {/* Privacy Notice */}
+        <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <div className="flex items-start gap-3">
+            <CheckCircle className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
+            <div className="text-sm text-blue-900">
+              <p className="font-semibold mb-1">Privacy Guarantee</p>
+              <p>
+                Your video is processed server-side and <strong>immediately deleted</strong> after
+                extracting pose data. We never store your video files.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="max-w-3xl mx-auto p-6">
+      {/* Header */}
+      <div className="text-center mb-8">
+        <h2 className="text-3xl font-bold text-foreground mb-2">
+          Record with Webcam: <span className="text-indigo-600 dark:text-indigo-400">{word}</span>
+        </h2>
+        <p className="text-foreground/70">
+          Record your sign directly from your camera
+        </p>
+      </div>
+
+      {/* Content */}
+      {renderContent()}
+    </div>
+  );
+}

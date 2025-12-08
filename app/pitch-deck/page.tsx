@@ -590,7 +590,7 @@ export default function PitchDeckPage() {
         <div className="space-y-6">
           <div className="bg-gradient-to-br from-yellow-50 to-orange-50 border-4 border-yellow-400 rounded-2xl p-8">
             <h3 className="text-4xl font-bold text-center text-orange-900 mb-8">
-              🏆 Why We Will Win This Hackathon
+              🏆 Why SignForge Will Succeed
             </h3>
 
             <div className="space-y-6">
@@ -716,7 +716,7 @@ export default function PitchDeckPage() {
                   🌐 Open Live Demo →
                 </a>
                 <p className="text-sm text-blue-200 mt-4">
-                  This isn't a hackathon demo. This is deployed infrastructure.
+                  This isn't a demo. This is deployed infrastructure.
                 </p>
               </div>
             </div>

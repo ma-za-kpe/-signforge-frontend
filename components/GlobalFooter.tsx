@@ -6,7 +6,7 @@ import { Presentation, Github, Twitter, Mail } from 'lucide-react'
 export default function GlobalFooter() {
   return (
     <footer className="mt-auto bg-white border-t border-gray-200">
-      {/* Sponsors Section */}
+      {/* Sponsors Section - Commented out
       <div className="max-w-7xl mx-auto px-4 py-6 sm:py-8 sm:px-6 lg:px-8">
         <div className="text-center mb-6 sm:mb-8">
           <h3 className="text-base sm:text-lg font-semibold text-gray-700 mb-2">Proudly Supported By</h3>
@@ -14,7 +14,6 @@ export default function GlobalFooter() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 sm:gap-8 items-center justify-items-center">
-          {/* UNICEF Ghana */}
           <a
             href="https://www.unicef.org/ghana/"
             target="_blank"
@@ -31,7 +30,6 @@ export default function GlobalFooter() {
             <p className="text-xs text-gray-600 text-center px-2">For Every Child</p>
           </a>
 
-          {/* MEST Africa */}
           <a
             href="https://meltwater.org"
             target="_blank"
@@ -48,7 +46,6 @@ export default function GlobalFooter() {
             <p className="text-xs text-gray-600 text-center px-2">Building Africa's Next Generation of Tech Entrepreneurs</p>
           </a>
 
-          {/* DevCongress */}
           <a
             href="https://devcongress.org"
             target="_blank"
@@ -66,6 +63,7 @@ export default function GlobalFooter() {
           </a>
         </div>
       </div>
+      */}
 
       {/* Bottom Bar with Pitch Deck Button and Social Links */}
       <div className="bg-gradient-to-r from-[#00549F] to-[#00A2E5]">
@@ -73,7 +71,7 @@ export default function GlobalFooter() {
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
             {/* Left: Copyright */}
             <p className="text-xs sm:text-sm text-white font-medium text-center sm:text-left">
-              SignForge Hackathon 2025 • Built with FastAPI, FAISS, and Next.js 15
+              SignForge 2025 • Built with FastAPI, FAISS, and Next.js 15
             </p>
 
             {/* Center: Pitch Deck Button */}

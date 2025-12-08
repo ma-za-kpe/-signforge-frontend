@@ -46,7 +46,7 @@ jest.mock('react-webcam', () => {
 })
 
 // Mock MediaPipe with controllable callbacks
-let mockLandmarkCallback: any = null
+const mockLandmarkCallback: any = null
 
 jest.mock('./MediaPipeHandler', () => {
   let callback: any = null
@@ -140,7 +140,7 @@ const simulateFrameCapture = (count: number = 60) => {
   console.log(`✅ simulateFrameCapture: completed ${count} calls`)
 }
 
-// Helper to navigate to recording state (through select → community → reference → classification → environment-check → recording)
+// Helper to navigate to recording state (through select → community → reference → classification → recording)
 const navigateToRecording = async (word: string = 'HELLO') => {
   // Select word (goes to community state)
   fireEvent.click(screen.getByText(`Select ${word}`))
@@ -157,9 +157,8 @@ const navigateToRecording = async (word: string = 'HELLO') => {
   await waitFor(() => screen.getByText('Continue to Recording'))
   fireEvent.click(screen.getByText('Continue to Recording'))
 
-  // In test mode, environment check is skipped and goes straight to recording
   // Wait for recording interface
-  await waitFor(() => screen.getByRole('button', { name: /start recording/i }))
+  await waitFor(() => screen.getByTestId('mock-webcam'))
 
   // MediaPipe should initialize automatically when entering recording state
   // The mock will set the global callback when MediaPipeHandler is instantiated

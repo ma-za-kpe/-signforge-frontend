@@ -22,6 +22,16 @@ const nextConfig: NextConfig = {
       },
     ],
   },
+  async rewrites() {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:9000';
+    return [
+      {
+        // Rewrite all /api/* EXCEPT /api/auth/* (which NextAuth handles)
+        source: '/api/:path((?!auth).*)',
+        destination: `${apiUrl}/api/:path*`,
+      },
+    ];
+  },
 };
 
 export default nextConfig;

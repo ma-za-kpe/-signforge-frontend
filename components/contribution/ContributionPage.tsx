@@ -15,8 +15,11 @@ import QualityFeedback from './QualityFeedback'
 import LightingQualityMeter from './LightingQualityMeter'
 import HandVisibilityIndicator from './HandVisibilityIndicator'
 import QualityScoreBreakdown from './QualityScoreBreakdown'
+import VideoContributionSelector from './VideoContributionSelector'
+import VideoUploader from './VideoUploader'
+import WebcamRecorder from './WebcamRecorder'
 
-type PageState = 'select' | 'community' | 'reference' | 'classification' | 'environment-check' | 'recording' | 'review' | 'success'
+type PageState = 'select' | 'community' | 'reference' | 'classification' | 'method-selection' | 'upload' | 'webcam-recording' | 'environment-check' | 'recording' | 'review' | 'success'
 
 export interface Frame {
   frame_number: number
@@ -57,6 +60,7 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
     sign_type_movement: 'static' | 'dynamic'
     sign_type_hands: 'one-handed' | 'two-handed'
   } | null>(null)
+  const [selectedMethod, setSelectedMethod] = useState<'webcam' | 'upload' | null>(null)
 
   // 3-attempt recording state
   const [currentAttempt, setCurrentAttempt] = useState(1)
@@ -66,6 +70,7 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
     duration: number
   }>>([])
   const [showAttemptReview, setShowAttemptReview] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   // Environment check state
   const [environmentCheck, setEnvironmentCheck] = useState<{
@@ -235,9 +240,9 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
       console.error('❌ No MediaStream (srcObject) attached to video element')
     }
 
-    // Initialize with 30 FPS target
-    console.log('🔧 Creating MediaPipeHandler with target FPS: 30')
-    mediaPipeHandlerRef.current = new MediaPipeHandler(videoElement, handleLandmarkResults, 30)
+    // Initialize MediaPipe handler
+    console.log('🔧 Creating MediaPipeHandler')
+    mediaPipeHandlerRef.current = new MediaPipeHandler(videoElement, handleLandmarkResults)
 
     try {
       console.log('⏳ Initializing MediaPipe...')
@@ -246,24 +251,14 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
       console.log('⏳ Starting MediaPipe processing...')
       await mediaPipeHandlerRef.current.start()
 
-      // Get and display FPS stats
-      const stats = mediaPipeHandlerRef.current.getStats()
-      setFpsStats(stats)
-
       console.log('✅ MediaPipe ready for recording')
-      console.log('📊 FPS Stats:', stats)
       console.log('📹 ==========================================')
 
-      // Warn if FPS is low
-      if (stats.actualFps && stats.actualFps < 20) {
-        toast.error(
-          `⚠️ Low camera FPS detected (${stats.actualFps.toFixed(1)} FPS). Recording quality may be affected.`,
-          { duration: 5000 }
-        )
-      }
     } catch (error) {
       console.error('❌ Failed to initialize MediaPipe:', error)
-      toast.error('Failed to start camera. Please check permissions and try again.', { duration: 5000 })
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      console.error('Error details:', errorMessage)
+      toast.error(`Failed to start camera processing: ${errorMessage}. Try refreshing the page.`, { duration: 7000 })
     }
   }
 
@@ -282,8 +277,6 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
   }, [pageState])
 
   const handleLandmarkResults = useCallback((results: LandmarkResult) => {
-    console.log('📸 handleLandmarkResults called, pageState:', pageState, 'isRecording:', isRecordingRef.current)
-
     // Draw skeleton overlay (HIDE during recording for distraction-free experience)
     if (canvasRef.current && webcamRef.current?.video) {
       const video = webcamRef.current.video
@@ -401,7 +394,8 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
 
 
   const handleReferenceReady = () => {
-    setPageState('classification')
+    // Skip classification - go straight to method selection
+    setPageState('method-selection')
   }
 
   const handleClassificationComplete = (classification: {
@@ -409,8 +403,8 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
     sign_type_hands: 'one-handed' | 'two-handed'
   }) => {
     setSignClassification(classification)
-    // In test mode, skip environment check and go straight to recording
-    setPageState(testMode ? 'recording' : 'environment-check')
+    // In test mode, skip method selection and go straight to recording
+    setPageState(testMode ? 'recording' : 'method-selection')
   }
 
   const handleBackToReference = () => {
@@ -545,8 +539,22 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
       duration: duration
     }
 
-    const newAttemptData = [...attemptData, newAttempt]
-    setAttemptData(newAttemptData)
+    // Use functional setState to avoid race conditions when called multiple times
+    let newAttemptData: typeof attemptData = []
+    setAttemptData(prev => {
+      // Prevent duplicate attempts by checking if this attempt already exists
+      const isDuplicate = prev.some(attempt =>
+        attempt.frames.length === newAttempt.frames.length &&
+        Math.abs(attempt.quality - newAttempt.quality) < 0.001
+      )
+      if (isDuplicate) {
+        console.log('⚠️ Duplicate attempt detected, skipping')
+        newAttemptData = prev
+        return prev
+      }
+      newAttemptData = [...prev, newAttempt]
+      return newAttemptData
+    })
 
     console.log(`🔍 handleAttemptComplete: attempts=${newAttemptData.length}/${maxAttempts}, currentAttempt=${currentAttempt}`)
 
@@ -555,7 +563,10 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
     if (newAttemptData.length < maxAttempts) {
       // Show brief review and prompt for next attempt
       setShowAttemptReview(true)
-      toast.success(`Attempt ${newAttemptData.length}/${maxAttempts} recorded! Quality: ${(attemptQuality * 100).toFixed(0)}%`, { duration: 3000 })
+      const attemptMessage = maxAttempts === 1
+        ? `Recording complete! Quality: ${(attemptQuality * 100).toFixed(0)}%`
+        : `Attempt ${newAttemptData.length}/${maxAttempts} recorded! Quality: ${(attemptQuality * 100).toFixed(0)}%`
+      toast.success(attemptMessage, { duration: 3000 })
 
       // Auto-advance to next attempt after 2 seconds
       // In test mode, DON'T auto-advance - let test manually trigger next attempt via button click
@@ -921,7 +932,12 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
 
   // Main button handler - starts the 3-attempt loop
   const handleSubmitContribution = async () => {
-    await handleAttemptComplete()
+    setIsSubmitting(true)
+    try {
+      await handleAttemptComplete()
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   const handleRetake = () => {
@@ -1019,6 +1035,74 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
         word={selectedWord}
         onComplete={handleClassificationComplete}
         onBack={handleBackToReference}
+      />
+      </>
+    )
+  }
+
+  if (pageState === 'method-selection') {
+    return (
+      <>
+      <Toaster position="top-center" reverseOrder={false} />
+      <VideoContributionSelector
+        word={selectedWord}
+        onMethodSelected={(method) => {
+          setSelectedMethod(method)
+          if (method === 'webcam') {
+            setPageState('webcam-recording')
+          } else {
+            setPageState('upload')
+          }
+        }}
+      />
+      </>
+    )
+  }
+
+  // Webcam recording with MediaRecorder API (new unified flow)
+  if (pageState === 'webcam-recording') {
+    return (
+      <>
+      <Toaster position="top-center" reverseOrder={false} />
+      <WebcamRecorder
+        word={selectedWord}
+        userId={userId}
+        onUploadComplete={(result) => {
+          // Contribution has been saved to database automatically
+          // Show success message and navigate back to sign selection
+          toast.success(result.message, { duration: 5000 })
+
+          // Reset state and go back to sign selection
+          setSelectedWord('')
+          setRecordedFrames([])
+          setSelectorKey(k => k + 1) // Force SignSelector to re-fetch updated stats
+          setPageState('select')
+        }}
+        onCancel={() => setPageState('method-selection')}
+      />
+      </>
+    )
+  }
+
+  if (pageState === 'upload') {
+    return (
+      <>
+      <Toaster position="top-center" reverseOrder={false} />
+      <VideoUploader
+        word={selectedWord}
+        userId={userId}
+        onUploadComplete={(result) => {
+          // Contribution has been saved to database automatically
+          // Show success message and navigate back to sign selection
+          toast.success(result.message, { duration: 5000 })
+
+          // Reset state and go back to sign selection
+          setSelectedWord('')
+          setRecordedFrames([])
+          setSelectorKey(k => k + 1) // Force SignSelector to re-fetch updated stats
+          setPageState('select')
+        }}
+        onCancel={() => setPageState('method-selection')}
       />
       </>
     )
@@ -1333,7 +1417,7 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
                 className="w-full md:w-auto bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 px-8 rounded-full md:rounded-xl transition-all duration-200 transform hover:scale-105 shadow-2xl text-lg md:text-xl flex items-center justify-center gap-3"
               >
                 <span className="text-2xl">⏺</span>
-                <span>Start Recording (Attempt {currentAttempt + 1}/{maxAttempts})</span>
+                <span>{maxAttempts === 1 ? 'Start Recording' : `Start Recording (Attempt ${currentAttempt + 1}/${maxAttempts})`}</span>
               </button>
               <p className="mt-3 text-sm text-white/80 md:text-gray-600 text-center">
                 Previous attempt recorded. Ready for next attempt?
@@ -1408,10 +1492,23 @@ export default function ContributionPage({ maxAttempts = 3, testMode = false }: 
                 <div className="flex flex-col gap-3">
                   <button
                     onClick={handleSubmitContribution}
-                    className="w-full bg-green-600 hover:bg-green-700 active:scale-95 text-white font-bold py-4 px-6 rounded-xl transition-all duration-200 shadow-lg flex items-center justify-center gap-2"
+                    disabled={isSubmitting}
+                    className={`w-full ${isSubmitting ? 'bg-green-500 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700 active:scale-95'} text-white font-bold py-4 px-6 rounded-xl transition-all duration-200 shadow-lg flex items-center justify-center gap-2`}
                   >
-                    <span>✓</span>
-                    <span>Looks Good - Submit</span>
+                    {isSubmitting ? (
+                      <>
+                        <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span>Submitting...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>✓</span>
+                        <span>Looks Good - Submit</span>
+                      </>
+                    )}
                   </button>
 
                   <div className="grid grid-cols-2 gap-3">

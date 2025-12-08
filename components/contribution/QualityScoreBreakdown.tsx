@@ -8,14 +8,14 @@ interface QualityBreakdown {
   motion_smoothness: number
   frame_completeness: number
   lighting_quality: number
-  components: {
+  components?: {
     overall: string
     hand_visibility: string
     motion_smoothness: string
     frame_completeness: string
     lighting: string
   }
-  recommendations: string[]
+  recommendations?: string[]
 }
 
 interface QualityScoreBreakdownProps {
@@ -37,6 +37,35 @@ export default function QualityScoreBreakdown({
     if (score >= 0.40) return 'text-orange-600'
     return 'text-red-600'
   }
+
+  // Helper to get label from score
+  const getScoreLabel = (score: number): string => {
+    if (score >= 0.85) return 'Excellent'
+    if (score >= 0.70) return 'Good'
+    if (score >= 0.55) return 'Fair'
+    if (score >= 0.40) return 'Needs Improvement'
+    return 'Poor'
+  }
+
+  // Generate components if not provided
+  const components = breakdown.components || {
+    overall: getScoreLabel(breakdown.overall_score),
+    hand_visibility: getScoreLabel(breakdown.hand_visibility),
+    motion_smoothness: getScoreLabel(breakdown.motion_smoothness),
+    frame_completeness: getScoreLabel(breakdown.frame_completeness),
+    lighting: getScoreLabel(breakdown.lighting_quality)
+  }
+
+  // Generate recommendations if not provided
+  const recommendations = breakdown.recommendations || (() => {
+    const recs: string[] = []
+    if (breakdown.hand_visibility < 0.7) recs.push('Ensure hands are clearly visible in frame')
+    if (breakdown.motion_smoothness < 0.7) recs.push('Make smoother, more controlled movements')
+    if (breakdown.frame_completeness < 0.7) recs.push('Keep hands in frame throughout the sign')
+    if (breakdown.lighting_quality < 0.7) recs.push('Improve lighting conditions')
+    if (recs.length === 0) recs.push('Great job! Your video quality is excellent.')
+    return recs
+  })()
 
   const getBackgroundColor = (score: number) => {
     if (score >= 0.85) return 'bg-green-50'
@@ -82,7 +111,7 @@ export default function QualityScoreBreakdown({
             {Math.round(breakdown.overall_score * 100)}%
           </div>
           <div className={`text-sm font-medium mt-1 ${getScoreColor(breakdown.overall_score)}`}>
-            {breakdown.components.overall}
+            {components.overall}
           </div>
           {signType && (
             <div className="text-xs text-gray-600 mt-2">
@@ -99,36 +128,36 @@ export default function QualityScoreBreakdown({
         <ScoreItem
           label="✋ Hand Visibility"
           score={breakdown.hand_visibility}
-          component={breakdown.components.hand_visibility}
+          component={components.hand_visibility}
         />
 
         <ScoreItem
           label="〰️ Motion Smoothness"
           score={breakdown.motion_smoothness}
-          component={breakdown.components.motion_smoothness}
+          component={components.motion_smoothness}
         />
 
         <ScoreItem
           label="📐 Frame Completeness"
           score={breakdown.frame_completeness}
-          component={breakdown.components.frame_completeness}
+          component={components.frame_completeness}
         />
 
         <ScoreItem
           label="💡 Lighting Quality"
           score={breakdown.lighting_quality}
-          component={breakdown.components.lighting}
+          component={components.lighting}
         />
       </div>
 
       {/* Recommendations */}
-      {showRecommendations && breakdown.recommendations.length > 0 && (
+      {showRecommendations && recommendations.length > 0 && (
         <div className="border-t border-gray-200 pt-4">
           <h4 className="text-md font-semibold text-gray-800 mb-3">
             {breakdown.overall_score >= 0.7 ? '✓ Great Job!' : '💡 Recommendations'}
           </h4>
           <ul className="space-y-2">
-            {breakdown.recommendations.map((rec, index) => (
+            {recommendations.map((rec, index) => (
               <li key={index} className="flex items-start gap-2 text-sm text-gray-700">
                 <span className="text-blue-500 mt-0.5">•</span>
                 <span>{rec}</span>

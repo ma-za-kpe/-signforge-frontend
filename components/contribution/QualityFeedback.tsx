@@ -21,7 +21,7 @@ export default function QualityFeedback({ frames }: QualityFeedbackProps) {
   // Calculate quality metrics (same as backend)
   const calculateQuality = () => {
     // 1. Hand Visibility Score (50%)
-    let handVisibilityScores: number[] = []
+    const handVisibilityScores: number[] = []
     for (const frame of frames) {
       let visibleHands = 0
 
@@ -42,7 +42,7 @@ export default function QualityFeedback({ frames }: QualityFeedbackProps) {
     const handVisibility = handVisibilityScores.reduce((a, b) => a + b, 0) / handVisibilityScores.length
 
     // 2. Frame Completeness Score (20%)
-    let completenessScores: number[] = []
+    const completenessScores: number[] = []
     for (const frame of frames) {
       const hasPose = frame.pose_landmarks?.length === 33
       const hasLeftHand = frame.left_hand_landmarks?.length === 21
@@ -54,7 +54,7 @@ export default function QualityFeedback({ frames }: QualityFeedbackProps) {
     const completeness = completenessScores.reduce((a, b) => a + b, 0) / completenessScores.length
 
     // 3. Motion Smoothness (30%) - simplified version
-    let smoothnessScores: number[] = []
+    const smoothnessScores: number[] = []
     for (let i = 1; i < frames.length; i++) {
       const prev = frames[i - 1]
       const curr = frames[i]
