@@ -64,14 +64,9 @@ export function UserButton() {
               <p className="font-medium text-gray-900">
                 {session.user.name}
               </p>
-              <p className="text-sm text-gray-500">
-                @{(session.user as any).username || "no-username"}
+              <p className="text-sm text-gray-500 truncate">
+                {session.user.email}
               </p>
-              {(session.user as any).reputation !== undefined && (
-                <p className="text-xs text-[#00549F] mt-1">
-                  {(session.user as any).reputation} reputation
-                </p>
-              )}
             </div>
 
             <a

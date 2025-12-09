@@ -34,6 +34,8 @@ declare module "next-auth/jwt" {
   interface JWT {
     id?: string
     email?: string
+    name?: string
+    picture?: string  // Google profile picture URL
     isAdmin?: boolean
     adminRole?: string | null
     username?: string | null

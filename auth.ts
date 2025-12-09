@@ -53,6 +53,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (user && user.email) {
         token.id = user.id
         token.email = user.email
+        token.name = user.name
+        token.picture = user.image  // Google profile picture
 
         // Check if user is admin
         const adminStatus = await checkAdminStatus(user.email)
@@ -73,6 +75,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     async session({ session, token }) {
       if (session.user) {
         session.user.id = token.id as string
+        session.user.name = token.name as string
+        session.user.image = token.picture as string  // Google profile picture
         session.user.isAdmin = token.isAdmin as boolean || false
         session.user.adminRole = token.adminRole as string | null
       }
